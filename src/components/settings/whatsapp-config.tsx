@@ -29,7 +29,7 @@ import {
   AccordionTrigger,
   AccordionContent,
 } from '@/components/ui/accordion';
-import type { WhatsAppConfig as WhatsAppConfigType } from '@/types';
+import type { WhatsAppConfig as WhatsAppConfigType, WhatsAppProvider } from '@/types';
 
 const MASKED_TOKEN = '••••••••••••••••';
 
@@ -69,6 +69,16 @@ export function WhatsAppConfig() {
   const [verifyToken, setVerifyToken] = useState('');
   const [pin, setPin] = useState('');
   const [tokenEdited, setTokenEdited] = useState(false);
+
+  // Evolution API state
+  const [selectedProvider, setSelectedProvider] = useState<WhatsAppProvider>('meta');
+  const [evolutionApiUrl, setEvolutionApiUrl] = useState('');
+  const [evolutionApiKey, setEvolutionApiKey] = useState('');
+  const [evolutionInstanceName, setEvolutionInstanceName] = useState('');
+  const [evolutionQrCode, setEvolutionQrCode] = useState<string | null>(null);
+  const [evolutionConnecting, setEvolutionConnecting] = useState(false);
+  const [evolutionPairingCode, setEvolutionPairingCode] = useState('');
+  const [showEvolutionApiKey, setShowEvolutionApiKey] = useState(false);
 
   // True once /register has succeeded on Meta's side (timestamp set
   // in the row). When false, the saved config is metadata-only and
@@ -115,28 +125,47 @@ export function WhatsAppConfig() {
 
       if (data) {
         setConfig(data);
+        // Set provider from config
+        setSelectedProvider(data.provider || 'meta');
+        // Meta fields
         setPhoneNumberId(data.phone_number_id || '');
         setWabaId(data.waba_id || '');
         setAccessToken(MASKED_TOKEN);
         setVerifyToken('');
         setPin('');
         setTokenEdited(false);
+        // Evolution fields
+        setEvolutionApiUrl(data.evolution_api_url || '');
+        setEvolutionApiKey(MASKED_TOKEN);
+        setEvolutionInstanceName(data.evolution_instance_name || '');
+        setEvolutionQrCode(null);
+        setEvolutionPairingCode('');
       } else {
         setConfig(null);
+        setSelectedProvider('meta');
         setPhoneNumberId('');
         setWabaId('');
         setAccessToken('');
         setVerifyToken('');
         setPin('');
         setTokenEdited(false);
+        setEvolutionApiUrl('');
+        setEvolutionApiKey('');
+        setEvolutionInstanceName('');
+        setEvolutionQrCode(null);
+        setEvolutionPairingCode('');
       }
       // Clear any stale probe result when reloading the row.
       setRegistrationProbe(null);
 
-      // Then verify health via the API (decrypts token + pings Meta)
+      // Then verify health via the API
       if (data) {
         try {
-          const res = await fetch('/api/whatsapp/config', { method: 'GET' });
+          // Use different endpoints based on provider
+          const healthEndpoint = data.provider === 'evolution'
+            ? '/api/whatsapp/evolution-config'
+            : '/api/whatsapp/config';
+          const res = await fetch(healthEndpoint, { method: 'GET' });
           const payload = await res.json();
 
           if (payload.connected) {
@@ -183,6 +212,60 @@ export function WhatsAppConfig() {
   }, [authLoading, profileLoading, user?.id, accountId, fetchConfig]);
 
   async function handleSave() {
+    // Evolution API save
+    if (selectedProvider === 'evolution') {
+      if (!evolutionApiUrl.trim()) {
+        toast.error('Evolution API URL is required');
+        return;
+      }
+      if (!evolutionInstanceName.trim()) {
+        toast.error('Instance name is required');
+        return;
+      }
+      if (!config && (!evolutionApiKey.trim() || evolutionApiKey === MASKED_TOKEN)) {
+        toast.error('Evolution API Key is required for initial setup');
+        return;
+      }
+
+      try {
+        setSaving(true);
+
+        const payload: Record<string, unknown> = {
+          evolution_api_url: evolutionApiUrl.trim(),
+          evolution_instance_name: evolutionInstanceName.trim(),
+        };
+
+        // Only send API key if it was edited (not the masked placeholder)
+        if (evolutionApiKey !== MASKED_TOKEN && evolutionApiKey.trim()) {
+          payload.evolution_api_key = evolutionApiKey.trim();
+        }
+
+        const res = await fetch('/api/whatsapp/evolution-config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+
+        const data = await res.json();
+
+        if (!res.ok) {
+          toast.error(data.error || 'Failed to save Evolution configuration');
+          setSaving(false);
+          return;
+        }
+
+        toast.success('Evolution API configuration saved');
+        if (accountId) await fetchConfig(accountId);
+      } catch (err) {
+        console.error('Evolution save error:', err);
+        toast.error('Failed to save Evolution configuration');
+      } finally {
+        setSaving(false);
+      }
+      return;
+    }
+
+    // Meta API save (existing logic)
     if (!phoneNumberId.trim()) {
       toast.error('Phone Number ID is required');
       return;
@@ -280,7 +363,13 @@ export function WhatsAppConfig() {
   async function handleTestConnection() {
     try {
       setTesting(true);
-      const res = await fetch('/api/whatsapp/config', { method: 'GET' });
+
+      // Use different endpoints based on provider
+      const testEndpoint = selectedProvider === 'evolution'
+        ? '/api/whatsapp/evolution-config'
+        : '/api/whatsapp/config';
+
+      const res = await fetch(testEndpoint, { method: 'GET' });
       const payload = await res.json();
 
       if (payload.connected) {
@@ -290,7 +379,9 @@ export function WhatsAppConfig() {
         toast.success(
           payload.phone_info?.verified_name
             ? `Connected to ${payload.phone_info.verified_name}`
-            : 'API connection successful'
+            : payload.instanceName
+              ? `Connected to Evolution instance: ${payload.instanceName}`
+              : 'API connection successful'
         );
       } else {
         setConnectionStatus('disconnected');
@@ -334,13 +425,23 @@ export function WhatsAppConfig() {
   }
 
   async function handleReset() {
-    if (!confirm('This will delete the current WhatsApp config so you can re-enter it. Continue?')) {
+    const confirmMessage = selectedProvider === 'evolution'
+      ? 'This will delete the Evolution API config so you can re-enter it. Continue?'
+      : 'This will delete the current WhatsApp config so you can re-enter it. Continue?';
+
+    if (!confirm(confirmMessage)) {
       return;
     }
 
     try {
       setResetting(true);
-      const res = await fetch('/api/whatsapp/config', { method: 'DELETE' });
+
+      // Use different endpoints based on provider
+      const deleteEndpoint = selectedProvider === 'evolution'
+        ? '/api/whatsapp/evolution-config'
+        : '/api/whatsapp/config';
+
+      const res = await fetch(deleteEndpoint, { method: 'DELETE' });
       const data = await res.json();
 
       if (!res.ok) {
@@ -350,11 +451,17 @@ export function WhatsAppConfig() {
 
       toast.success('Configuration cleared. You can now re-enter your credentials.');
       setConfig(null);
+      setSelectedProvider('meta');
       setPhoneNumberId('');
       setWabaId('');
       setAccessToken('');
       setVerifyToken('');
       setTokenEdited(false);
+      setEvolutionApiUrl('');
+      setEvolutionApiKey('');
+      setEvolutionInstanceName('');
+      setEvolutionQrCode(null);
+      setEvolutionPairingCode('');
       setConnectionStatus('disconnected');
       setResetReason(null);
       setStatusMessage('');
@@ -369,6 +476,67 @@ export function WhatsAppConfig() {
   function handleCopyWebhookUrl() {
     navigator.clipboard.writeText(webhookUrl);
     toast.success('Webhook URL copied to clipboard');
+  }
+
+  // Evolution API: Get QR code
+  async function handleEvolutionGetQrCode() {
+    try {
+      setEvolutionConnecting(true);
+      const res = await fetch('/api/whatsapp/evolution-config/connect', {
+        method: 'GET',
+      });
+      const data = await res.json();
+
+      if (!res.ok) {
+        toast.error(data.error || 'Failed to get QR code');
+        return;
+      }
+
+      if (data.qrcode) {
+        setEvolutionQrCode(data.qrcode);
+        toast.success('QR code loaded. Scan with WhatsApp.');
+      }
+    } catch (err) {
+      console.error('Evolution QR code error:', err);
+      toast.error('Failed to get QR code');
+    } finally {
+      setEvolutionConnecting(false);
+    }
+  }
+
+  // Evolution API: Connect with pairing code
+  async function handleEvolutionConnect() {
+    if (!evolutionPairingCode.trim()) {
+      toast.error('Phone number is required');
+      return;
+    }
+
+    try {
+      setEvolutionConnecting(true);
+      const res = await fetch('/api/whatsapp/evolution-config/connect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ number: evolutionPairingCode.trim() }),
+      });
+      const data = await res.json();
+
+      if (!res.ok) {
+        toast.error(data.error || 'Failed to connect');
+        return;
+      }
+
+      if (data.qrcode) {
+        setEvolutionQrCode(data.qrcode);
+      }
+
+      toast.success('Connection initiated. Check WhatsApp for confirmation.');
+      if (accountId) await fetchConfig(accountId);
+    } catch (err) {
+      console.error('Evolution connect error:', err);
+      toast.error('Failed to connect');
+    } finally {
+      setEvolutionConnecting(false);
+    }
   }
 
   if (loading) {
@@ -451,12 +619,46 @@ export function WhatsAppConfig() {
           </AlertDescription>
         </Alert>
 
-        {/* Registration Status — the "is it actually live?" check.
+        {/* Provider Selection */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-foreground">{t('providerTitle') || 'WhatsApp Provider'}</CardTitle>
+            <CardDescription className="text-muted-foreground">
+              {t('providerDesc') || 'Choose between Meta Business API or Evolution API'}
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="flex gap-2">
+              <Button
+                variant={selectedProvider === 'meta' ? 'default' : 'outline'}
+                onClick={() => setSelectedProvider('meta')}
+                className={selectedProvider === 'meta'
+                  ? 'bg-primary text-primary-foreground'
+                  : 'border-border text-muted-foreground hover:text-foreground hover:bg-muted'
+                }
+              >
+                Meta Business API
+              </Button>
+              <Button
+                variant={selectedProvider === 'evolution' ? 'default' : 'outline'}
+                onClick={() => setSelectedProvider('evolution')}
+                className={selectedProvider === 'evolution'
+                  ? 'bg-primary text-primary-foreground'
+                  : 'border-border text-muted-foreground hover:text-foreground hover:bg-muted'
+                }
+              >
+                Evolution API
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Registration Status — Meta only.
             Credentials being valid is necessary but not sufficient;
             without a successful /register call the number won't
             receive inbound events. Surface this dimension separately
             so users don't trust a misleading green banner. */}
-        {config && (
+        {config && selectedProvider === 'meta' && (
           <Alert
             className={
               isRegistered
@@ -554,134 +756,245 @@ export function WhatsAppConfig() {
           </Alert>
         )}
 
-        {/* API Credentials */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-foreground">{t('apiCredentialsTitle')}</CardTitle>
-            <CardDescription className="text-muted-foreground">
-              {t('apiCredentialsDesc')}
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="space-y-2">
-              <Label className="text-muted-foreground">{t('phoneNumberId')}</Label>
-              <Input
-                placeholder="e.g. 100234567890123"
-                value={phoneNumberId}
-                onChange={(e) => setPhoneNumberId(e.target.value)}
-                className="bg-muted border-border text-foreground placeholder:text-muted-foreground"
-              />
-            </div>
-
-            <div className="space-y-2">
-              <Label className="text-muted-foreground">{t('wabaId')}</Label>
-              <Input
-                placeholder="e.g. 100234567890456"
-                value={wabaId}
-                onChange={(e) => setWabaId(e.target.value)}
-                className="bg-muted border-border text-foreground placeholder:text-muted-foreground"
-              />
-            </div>
-
-            <div className="space-y-2">
-              <Label className="text-muted-foreground">{t('accessToken')}</Label>
-              <div className="relative">
+        {/* API Credentials — Meta or Evolution */}
+        {selectedProvider === 'meta' ? (
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-foreground">{t('apiCredentialsTitle')}</CardTitle>
+              <CardDescription className="text-muted-foreground">
+                {t('apiCredentialsDesc')}
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="space-y-2">
+                <Label className="text-muted-foreground">{t('phoneNumberId')}</Label>
                 <Input
-                  type={showToken ? 'text' : 'password'}
-                  placeholder={t('accessTokenPlaceholder')}
-                  value={accessToken}
-                  onChange={(e) => {
-                    setAccessToken(e.target.value);
-                    setTokenEdited(true);
-                  }}
-                  onFocus={() => {
-                    if (accessToken === MASKED_TOKEN) {
-                      setAccessToken('');
+                  placeholder="e.g. 100234567890123"
+                  value={phoneNumberId}
+                  onChange={(e) => setPhoneNumberId(e.target.value)}
+                  className="bg-muted border-border text-foreground placeholder:text-muted-foreground"
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label className="text-muted-foreground">{t('wabaId')}</Label>
+                <Input
+                  placeholder="e.g. 100234567890456"
+                  value={wabaId}
+                  onChange={(e) => setWabaId(e.target.value)}
+                  className="bg-muted border-border text-foreground placeholder:text-muted-foreground"
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label className="text-muted-foreground">{t('accessToken')}</Label>
+                <div className="relative">
+                  <Input
+                    type={showToken ? 'text' : 'password'}
+                    placeholder={t('accessTokenPlaceholder')}
+                    value={accessToken}
+                    onChange={(e) => {
+                      setAccessToken(e.target.value);
                       setTokenEdited(true);
-                    }
-                  }}
-                  className="bg-muted border-border text-foreground placeholder:text-muted-foreground pr-10"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowToken(!showToken)}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
-                >
-                  {showToken ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
-                </button>
+                    }}
+                    onFocus={() => {
+                      if (accessToken === MASKED_TOKEN) {
+                        setAccessToken('');
+                        setTokenEdited(true);
+                      }
+                    }}
+                    className="bg-muted border-border text-foreground placeholder:text-muted-foreground pr-10"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowToken(!showToken)}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                  >
+                    {showToken ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+                  </button>
+                </div>
+                {config && !tokenEdited && (
+                  <p className="text-xs text-muted-foreground">
+                    {t('tokenHidden')}
+                  </p>
+                )}
               </div>
-              {config && !tokenEdited && (
-                <p className="text-xs text-muted-foreground">
-                  {t('tokenHidden')}
-                </p>
-              )}
-            </div>
 
-            <div className="space-y-2">
-              <Label className="text-muted-foreground">{t('webhookVerifyToken')}</Label>
-              <Input
-                placeholder={t('webhookVerifyTokenPlaceholder')}
-                value={verifyToken}
-                onChange={(e) => setVerifyToken(e.target.value)}
-                className="bg-muted border-border text-foreground placeholder:text-muted-foreground"
-              />
-              <p className="text-xs text-muted-foreground">
-                {t('webhookVerifyTokenHint')}
-              </p>
-            </div>
-
-            <div className="space-y-2">
-              <Label className="text-muted-foreground">
-                {t('twoStepPin')}
-                <span className="ml-1 text-muted-foreground">{t('optional')}</span>
-              </Label>
-              <Input
-                type="text"
-                inputMode="numeric"
-                maxLength={6}
-                placeholder={t('pinPlaceholder')}
-                value={pin}
-                onChange={(e) =>
-                  setPin(e.target.value.replace(/\D/g, '').slice(0, 6))
-                }
-                className="bg-muted border-border text-foreground placeholder:text-muted-foreground tracking-widest"
-              />
-              <p className="text-xs text-muted-foreground leading-relaxed">
-                <span dangerouslySetInnerHTML={{ __html: t('pinHint') }} />
-              </p>
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Webhook URL */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-foreground">{t('webhookTitle')}</CardTitle>
-            <CardDescription className="text-muted-foreground">
-              {t('webhookDesc')}
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-2">
-              <Label className="text-muted-foreground">{t('webhookUrl')}</Label>
-              <div className="flex gap-2">
+              <div className="space-y-2">
+                <Label className="text-muted-foreground">{t('webhookVerifyToken')}</Label>
                 <Input
-                  readOnly
-                  value={webhookUrl}
-                  className="bg-muted border-border text-muted-foreground font-mono text-sm"
+                  placeholder={t('webhookVerifyTokenPlaceholder')}
+                  value={verifyToken}
+                  onChange={(e) => setVerifyToken(e.target.value)}
+                  className="bg-muted border-border text-foreground placeholder:text-muted-foreground"
                 />
-                <Button
-                  variant="outline"
-                  size="icon"
-                  onClick={handleCopyWebhookUrl}
-                  className="shrink-0 border-border text-muted-foreground hover:text-foreground hover:bg-muted"
-                >
-                  <Copy className="size-4" />
-                </Button>
+                <p className="text-xs text-muted-foreground">
+                  {t('webhookVerifyTokenHint')}
+                </p>
               </div>
-            </div>
-          </CardContent>
-        </Card>
+
+              <div className="space-y-2">
+                <Label className="text-muted-foreground">
+                  {t('twoStepPin')}
+                  <span className="ml-1 text-muted-foreground">{t('optional')}</span>
+                </Label>
+                <Input
+                  type="text"
+                  inputMode="numeric"
+                  maxLength={6}
+                  placeholder={t('pinPlaceholder')}
+                  value={pin}
+                  onChange={(e) =>
+                    setPin(e.target.value.replace(/\D/g, '').slice(0, 6))
+                  }
+                  className="bg-muted border-border text-foreground placeholder:text-muted-foreground tracking-widest"
+                />
+                <p className="text-xs text-muted-foreground leading-relaxed">
+                  <span dangerouslySetInnerHTML={{ __html: t('pinHint') }} />
+                </p>
+              </div>
+            </CardContent>
+          </Card>
+        ) : (
+          /* Evolution API Credentials */
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-foreground">Evolution API Configuration</CardTitle>
+              <CardDescription className="text-muted-foreground">
+                Connect to your Evolution API instance for WhatsApp messaging
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="space-y-2">
+                <Label className="text-muted-foreground">API URL</Label>
+                <Input
+                  placeholder="https://your-evolution-instance.com"
+                  value={evolutionApiUrl}
+                  onChange={(e) => setEvolutionApiUrl(e.target.value)}
+                  className="bg-muted border-border text-foreground placeholder:text-muted-foreground"
+                />
+                <p className="text-xs text-muted-foreground">
+                  The base URL of your Evolution API instance
+                </p>
+              </div>
+
+              <div className="space-y-2">
+                <Label className="text-muted-foreground">API Key</Label>
+                <div className="relative">
+                  <Input
+                    type={showEvolutionApiKey ? 'text' : 'password'}
+                    placeholder="Your Evolution API key"
+                    value={evolutionApiKey}
+                    onChange={(e) => setEvolutionApiKey(e.target.value)}
+                    onFocus={() => {
+                      if (evolutionApiKey === MASKED_TOKEN) {
+                        setEvolutionApiKey('');
+                      }
+                    }}
+                    className="bg-muted border-border text-foreground placeholder:text-muted-foreground pr-10"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowEvolutionApiKey(!showEvolutionApiKey)}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                  >
+                    {showEvolutionApiKey ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+                  </button>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label className="text-muted-foreground">Instance Name</Label>
+                <Input
+                  placeholder="my-whatsapp-instance"
+                  value={evolutionInstanceName}
+                  onChange={(e) => setEvolutionInstanceName(e.target.value)}
+                  className="bg-muted border-border text-foreground placeholder:text-muted-foreground"
+                />
+                <p className="text-xs text-muted-foreground">
+                  A unique name for your WhatsApp instance in Evolution
+                </p>
+              </div>
+
+              {/* QR Code Section */}
+              {(evolutionQrCode || evolutionConnecting) && (
+                <div className="space-y-4 pt-4 border-t border-border">
+                  <Label className="text-muted-foreground">Connect WhatsApp</Label>
+                  {evolutionConnecting ? (
+                    <div className="flex items-center justify-center py-8">
+                      <Loader2 className="size-8 animate-spin text-primary" />
+                      <span className="ml-2 text-muted-foreground">Connecting...</span>
+                    </div>
+                  ) : evolutionQrCode ? (
+                    <div className="space-y-3">
+                      <p className="text-sm text-muted-foreground">
+                        Scan this QR code with your WhatsApp app:
+                      </p>
+                      <div className="flex justify-center">
+                        <img
+                          src={evolutionQrCode}
+                          alt="WhatsApp QR Code"
+                          className="max-w-[256px] rounded-lg border border-border"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label className="text-muted-foreground">Or use pairing code:</Label>
+                        <div className="flex gap-2">
+                          <Input
+                            placeholder="Phone number (e.g. 5511999999999)"
+                            value={evolutionPairingCode}
+                            onChange={(e) => setEvolutionPairingCode(e.target.value)}
+                            className="bg-muted border-border text-foreground placeholder:text-muted-foreground"
+                          />
+                          <Button
+                            variant="outline"
+                            onClick={handleEvolutionConnect}
+                            disabled={!evolutionPairingCode.trim()}
+                            className="border-border text-muted-foreground hover:text-foreground hover:bg-muted"
+                          >
+                            Connect
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Webhook URL — Meta only. Evolution configures its webhook internally. */}
+        {selectedProvider === 'meta' && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-foreground">{t('webhookTitle')}</CardTitle>
+              <CardDescription className="text-muted-foreground">
+                {t('webhookDesc')}
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-2">
+                <Label className="text-muted-foreground">{t('webhookUrl')}</Label>
+                <div className="flex gap-2">
+                  <Input
+                    readOnly
+                    value={webhookUrl}
+                    className="bg-muted border-border text-muted-foreground font-mono text-sm"
+                  />
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    onClick={handleCopyWebhookUrl}
+                    className="shrink-0 border-border text-muted-foreground hover:text-foreground hover:bg-muted"
+                  >
+                    <Copy className="size-4" />
+                  </Button>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
         {/* Action Buttons */}
         <div className="flex flex-wrap gap-3">
@@ -717,6 +1030,27 @@ export function WhatsAppConfig() {
               </>
             )}
           </Button>
+          {/* Evolution API: Get QR Code button */}
+          {selectedProvider === 'evolution' && config && (
+            <Button
+              variant="outline"
+              onClick={handleEvolutionGetQrCode}
+              disabled={evolutionConnecting}
+              className="border-border text-muted-foreground hover:text-foreground hover:bg-muted"
+            >
+              {evolutionConnecting ? (
+                <>
+                  <Loader2 className="size-4 animate-spin" />
+                  Connecting...
+                </>
+              ) : (
+                <>
+                  <ExternalLink className="size-4" />
+                  Get QR Code
+                </>
+              )}
+            </Button>
+          )}
           {config && (
             <Button
               variant="outline"

@@ -266,6 +266,8 @@ export interface MessageReaction {
   created_at: string;
 }
 
+export type WhatsAppProvider = 'meta' | 'evolution';
+
 export interface WhatsAppConfig {
   id: string;
   user_id: string;
@@ -285,6 +287,14 @@ export interface WhatsAppConfig {
   subscribed_apps_at?: string;
   /** Last error from /register; cleared on success. */
   last_registration_error?: string;
+  /** WhatsApp provider: 'meta' (default) or 'evolution' */
+  provider: WhatsAppProvider;
+  /** Evolution API instance name */
+  evolution_instance_name?: string;
+  /** Evolution API base URL */
+  evolution_api_url?: string;
+  /** Evolution API key (encrypted) */
+  evolution_api_key?: string;
 }
 
 // Raw Meta status enum. We persist this verbatim from Meta (sync + webhook)

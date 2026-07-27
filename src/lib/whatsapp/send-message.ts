@@ -30,6 +30,11 @@ import {
   type MediaKind,
 } from '@/lib/whatsapp/meta-api';
 import {
+  sendEvolutionTextMessage,
+  sendEvolutionMediaMessage,
+  getEvolutionCredentials,
+} from '@/lib/whatsapp/evolution-api';
+import {
   validateInteractivePayload,
   interactivePayloadPreviewText,
   type InteractiveMessagePayload,
@@ -42,7 +47,7 @@ import {
   phoneVariants,
   isRecipientNotAllowedError,
 } from '@/lib/whatsapp/phone-utils';
-import type { MessageTemplate } from '@/types';
+import type { MessageTemplate, WhatsAppProvider } from '@/types';
 import { isMessageTemplate } from '@/lib/whatsapp/template-row-guard';
 
 export const MEDIA_KINDS = ['image', 'video', 'document', 'audio'] as const;
@@ -329,7 +334,59 @@ export async function sendMessageToConversation(
     templateRow = data ?? null;
   }
 
+  // Determine provider from config
+  const provider: WhatsAppProvider = config.provider || 'meta';
+
   const attempt = async (phone: string): Promise<string> => {
+    // Evolution API provider
+    if (provider === 'evolution') {
+      const credentials = getEvolutionCredentials(config);
+      if (!credentials) {
+        throw new SendMessageError(
+          'evolution_not_configured',
+          'Evolution API credentials not configured',
+          400
+        );
+      }
+
+      if (isMediaKind) {
+        const result = await sendEvolutionMediaMessage({
+          baseUrl: credentials.baseUrl,
+          apiKey: credentials.apiKey,
+          instanceName: credentials.instanceName,
+          number: phone,
+          mediatype: messageType as 'image' | 'video' | 'document' | 'audio',
+          media: mediaUrl!,
+          caption: contentText || undefined,
+          fileName: filename || undefined,
+        });
+        return result.key.id;
+      }
+
+      // Template and interactive messages are not supported by Evolution API
+      // Fall back to text message
+      if (messageType === 'template' || messageType === 'interactive') {
+        const result = await sendEvolutionTextMessage({
+          baseUrl: credentials.baseUrl,
+          apiKey: credentials.apiKey,
+          instanceName: credentials.instanceName,
+          number: phone,
+          text: contentText || `[${messageType}]`,
+        });
+        return result.key.id;
+      }
+
+      const result = await sendEvolutionTextMessage({
+        baseUrl: credentials.baseUrl,
+        apiKey: credentials.apiKey,
+        instanceName: credentials.instanceName,
+        number: phone,
+        text: contentText!,
+      });
+      return result.key.id;
+    }
+
+    // Meta API provider (default)
     if (messageType === 'template') {
       const result = await sendTemplateMessage({
         phoneNumberId: config.phone_number_id,
@@ -395,39 +452,58 @@ export async function sendMessageToConversation(
     return result.messageId;
   };
 
-  // Send via Meta — retry across phone-number variants if Meta rejects
+  // Send via provider — retry across phone-number variants if Meta rejects
   // with "recipient not in allowed list"; persist a working variant
   // back to the contact so the next send goes straight through.
+  // Evolution API doesn't have phone variants, so we skip the retry logic.
   let waMessageId = '';
   let workingPhone = sanitizedPhone;
-  try {
-    const variants = phoneVariants(sanitizedPhone);
-    let lastError: unknown = null;
 
-    for (const variant of variants) {
-      try {
-        waMessageId = await attempt(variant);
-        workingPhone = variant;
-        lastError = null;
-        break;
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        if (!isRecipientNotAllowedError(message)) {
-          throw err;
-        }
-        lastError = err;
-        console.warn(
-          `[send-message] variant "${variant}" rejected by Meta, trying next…`
-        );
-      }
+  if (provider === 'evolution') {
+    // Evolution API — no phone variant retry needed
+    try {
+      waMessageId = await attempt(sanitizedPhone);
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : 'Unknown Evolution API error';
+      console.error('[send-message] Evolution send failed:', message);
+      throw new SendMessageError(
+        'evolution_error',
+        `Evolution API error: ${message}`,
+        502
+      );
     }
+  } else {
+    // Meta API — retry with phone variants
+    try {
+      const variants = phoneVariants(sanitizedPhone);
+      let lastError: unknown = null;
 
-    if (lastError) throw lastError;
-  } catch (err) {
-    const message =
-      err instanceof Error ? err.message : 'Unknown Meta API error';
-    console.error('[send-message] Meta send failed for all variants:', message);
-    throw new SendMessageError('meta_error', `Meta API error: ${message}`, 502);
+      for (const variant of variants) {
+        try {
+          waMessageId = await attempt(variant);
+          workingPhone = variant;
+          lastError = null;
+          break;
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          if (!isRecipientNotAllowedError(message)) {
+            throw err;
+          }
+          lastError = err;
+          console.warn(
+            `[send-message] variant "${variant}" rejected by Meta, trying next…`
+          );
+        }
+      }
+
+      if (lastError) throw lastError;
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : 'Unknown Meta API error';
+      console.error('[send-message] Meta send failed for all variants:', message);
+      throw new SendMessageError('meta_error', `Meta API error: ${message}`, 502);
+    }
   }
 
   if (workingPhone !== sanitizedPhone) {
