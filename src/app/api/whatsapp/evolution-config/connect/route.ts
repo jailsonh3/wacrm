@@ -62,13 +62,20 @@ export async function GET() {
 
     try {
       // Always ensure webhook is configured — even for existing instances
-      await setEvolutionWebhook({
+      const webhookResult = await setEvolutionWebhook({
         baseUrl: credentials.baseUrl,
         apiKey: credentials.apiKey,
         instanceName: credentials.instanceName,
         webhookUrl,
-      }).catch(() => {
-        // Ignore errors — instance might not exist yet
+      }).catch((err) => {
+        console.warn('[evolution-connect] Webhook set failed (non-fatal):', err);
+        return null;
+      });
+
+      console.log('[evolution-connect] Webhook configured:', {
+        url: webhookUrl,
+        byEvents: false,
+        result: webhookResult,
       });
 
       const qrCode = await getEvolutionQrCode({

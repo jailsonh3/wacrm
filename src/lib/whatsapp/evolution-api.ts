@@ -142,6 +142,8 @@ export async function createEvolutionInstance(params: {
             enabled: true,
             url: webhookUrl,
             events: webhookEvents,
+            byEvents: false,
+            base64: false,
           }
         : undefined,
     }),
@@ -299,6 +301,8 @@ export async function setEvolutionWebhook(params: {
         enabled: true,
         url: webhookUrl,
         events: webhookEvents,
+        byEvents: false,
+        base64: false,
       },
     }),
   });
