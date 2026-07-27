@@ -228,18 +228,8 @@ export async function DELETE() {
       return NextResponse.json({ error: 'No Evolution config found' }, { status: 404 });
     }
 
-    const credentials = getEvolutionCredentials(config);
-    if (credentials) {
-      try {
-        await disconnectEvolutionInstance({
-          baseUrl: credentials.baseUrl,
-          apiKey: credentials.apiKey,
-          instanceName: credentials.instanceName,
-        });
-      } catch (error) {
-        console.warn('[evolution-config] Failed to disconnect instance:', error);
-      }
-    }
+    // Only remove the config from DB — do NOT delete the Evolution instance
+    // The user's WhatsApp instance stays alive on Evolution API
 
     const { error: deleteError } = await supabase
       .from('whatsapp_config')

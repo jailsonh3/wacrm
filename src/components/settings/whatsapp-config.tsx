@@ -1013,37 +1013,48 @@ export function WhatsAppConfig() {
           </>
         )}
 
-        {/* Webhook URL — Meta only. Evolution configures its webhook internally. */}
-        {selectedProvider === 'meta' && (
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-foreground">{t('webhookTitle')}</CardTitle>
-              <CardDescription className="text-muted-foreground">
-                {t('webhookDesc')}
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-2">
-                <Label className="text-muted-foreground">{t('webhookUrl')}</Label>
-                <div className="flex gap-2">
-                  <Input
-                    readOnly
-                    value={webhookUrl}
-                    className="bg-muted border-border text-muted-foreground font-mono text-sm"
-                  />
-                  <Button
-                    variant="outline"
-                    size="icon"
-                    onClick={handleCopyWebhookUrl}
-                    className="shrink-0 border-border text-muted-foreground hover:text-foreground hover:bg-muted"
-                  >
-                    <Copy className="size-4" />
-                  </Button>
-                </div>
+        {/* Webhook URL */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-foreground">{t('webhookTitle')}</CardTitle>
+            <CardDescription className="text-muted-foreground">
+              {selectedProvider === 'evolution'
+                ? 'Configure this webhook URL on your Evolution API server'
+                : t('webhookDesc')}
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-2">
+              <Label className="text-muted-foreground">{t('webhookUrl')}</Label>
+              <div className="flex gap-2">
+                <Input
+                  readOnly
+                  value={
+                    selectedProvider === 'evolution'
+                      ? `${window.location.origin}/api/evolution-webhook`
+                      : webhookUrl
+                  }
+                  className="bg-muted border-border text-muted-foreground font-mono text-sm"
+                />
+                <Button
+                  variant="outline"
+                  size="icon"
+                  onClick={() => {
+                    navigator.clipboard.writeText(
+                      selectedProvider === 'evolution'
+                        ? `${window.location.origin}/api/evolution-webhook`
+                        : webhookUrl
+                    );
+                    toast.success('Copied!');
+                  }}
+                  className="shrink-0 border-border text-muted-foreground hover:text-foreground hover:bg-muted"
+                >
+                  <Copy className="size-4" />
+                </Button>
               </div>
-            </CardContent>
-          </Card>
-        )}
+            </div>
+          </CardContent>
+        </Card>
 
         {/* Action Buttons */}
         <div className="flex flex-wrap gap-3">
