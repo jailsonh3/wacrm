@@ -79,6 +79,7 @@ export function WhatsAppConfig() {
   const [evolutionConnecting, setEvolutionConnecting] = useState(false);
   const [evolutionPairingCode, setEvolutionPairingCode] = useState('');
   const [showEvolutionApiKey, setShowEvolutionApiKey] = useState(false);
+  const [editingEvolution, setEditingEvolution] = useState(false);
 
   // True once /register has succeeded on Meta's side (timestamp set
   // in the row). When false, the saved config is metadata-only and
@@ -127,6 +128,8 @@ export function WhatsAppConfig() {
         setConfig(data);
         // Set provider from config
         setSelectedProvider(data.provider || 'meta');
+        // When Evolution is already configured, hide the form
+        setEditingEvolution(data.provider !== 'evolution');
         // Meta fields
         setPhoneNumberId(data.phone_number_id || '');
         setWabaId(data.waba_id || '');
@@ -143,6 +146,7 @@ export function WhatsAppConfig() {
       } else {
         setConfig(null);
         setSelectedProvider('meta');
+        setEditingEvolution(true);
         setPhoneNumberId('');
         setWabaId('');
         setAccessToken('');
@@ -452,6 +456,7 @@ export function WhatsAppConfig() {
       toast.success('Configuration cleared. You can now re-enter your credentials.');
       setConfig(null);
       setSelectedProvider('meta');
+      setEditingEvolution(true);
       setPhoneNumberId('');
       setWabaId('');
       setAccessToken('');
@@ -856,7 +861,49 @@ export function WhatsAppConfig() {
             </CardContent>
           </Card>
         ) : (
-          /* Evolution API Credentials */
+          <>
+          {config && selectedProvider === 'evolution' && !editingEvolution ? (
+          /* Configured — show compact status card */
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-foreground">Evolution API</CardTitle>
+              <CardDescription className="text-muted-foreground">
+                Instance configured. Edit to change credentials.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm text-muted-foreground">Instance</p>
+                  <p className="text-foreground font-medium">{config?.evolution_instance_name}</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  {connectionStatus === 'connected' ? (
+                    <CheckCircle2 className="size-4 text-primary" />
+                  ) : (
+                    <XCircle className="size-4 text-red-500" />
+                  )}
+                  <span className="text-sm text-muted-foreground">
+                    {connectionStatus === 'connected' ? 'Connected' : 'Disconnected'}
+                  </span>
+                </div>
+              </div>
+              <div>
+                <p className="text-sm text-muted-foreground">API URL</p>
+                <p className="text-foreground text-sm truncate">{config?.evolution_api_url}</p>
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setEditingEvolution(true)}
+                className="border-border text-muted-foreground hover:text-foreground hover:bg-muted"
+              >
+                Edit Configuration
+              </Button>
+            </CardContent>
+          </Card>
+          ) : (
+          /* Not configured or editing — show full form */
           <Card>
             <CardHeader>
               <CardTitle className="text-foreground">Evolution API Configuration</CardTitle>
@@ -962,6 +1009,8 @@ export function WhatsAppConfig() {
               )}
             </CardContent>
           </Card>
+          )}
+          </>
         )}
 
         {/* Webhook URL — Meta only. Evolution configures its webhook internally. */}

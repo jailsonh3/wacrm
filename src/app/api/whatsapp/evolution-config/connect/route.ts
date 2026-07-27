@@ -58,7 +58,7 @@ export async function GET() {
       return NextResponse.json({ error: 'Missing Evolution API credentials' }, { status: 400 });
     }
 
-    const webhookUrl = `${process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3000'}/api/whatsapp/evolution-webhook`;
+    const webhookUrl = `${process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3000'}/api/evolution-webhook`;
 
     try {
       // Always ensure webhook is configured — even for existing instances
