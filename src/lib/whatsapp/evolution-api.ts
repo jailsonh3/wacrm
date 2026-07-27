@@ -282,7 +282,7 @@ export async function disconnectEvolutionInstance(params: {
 
 /**
  * Set or update the webhook URL for an Evolution instance.
- * v2.3.7 expects flat body: { enabled, url, events } (NOT nested under "webhook")
+ * v2.3.7 webhook endpoint requires the "webhook" wrapper.
  */
 export async function setEvolutionWebhook(params: {
   baseUrl: string;
@@ -295,9 +295,11 @@ export async function setEvolutionWebhook(params: {
   return evolutionFetch<unknown>(baseUrl, apiKey, `/webhook/set/${instanceName}`, {
     method: 'POST',
     body: JSON.stringify({
-      enabled: true,
-      url: webhookUrl,
-      events: webhookEvents,
+      webhook: {
+        enabled: true,
+        url: webhookUrl,
+        events: webhookEvents,
+      },
     }),
   });
 }
