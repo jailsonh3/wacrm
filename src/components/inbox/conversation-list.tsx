@@ -8,7 +8,7 @@ import {
   normalizeConversations,
 } from "@/lib/inbox/conversations";
 import { cn } from "@/lib/utils";
-import type { Conversation, ConversationStatus, Tag } from "@/types";
+import type { Conversation, ConversationStatus, Tag, Profile } from "@/types";
 import { Search, ChevronDown, X } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { useTranslations } from "next-intl";
@@ -138,6 +138,19 @@ export function ConversationList({
     return () => {
       cancelled = true;
     };
+  }, []);
+
+  // Agent profiles — used to resolve assigned_agent_id → display name
+  // in the conversation list items.
+  const [profiles, setProfiles] = useState<Profile[]>([]);
+  useEffect(() => {
+    const supabase = createClient();
+    let cancelled = false;
+    (async () => {
+      const { data } = await supabase.from("profiles").select("*").order("full_name");
+      if (!cancelled && data) setProfiles(data as Profile[]);
+    })();
+    return () => { cancelled = true; };
   }, []);
 
   // Company options are derived from the loaded conversations — there's no
@@ -413,6 +426,7 @@ export function ConversationList({
                 conversation={conv}
                 isActive={conv.id === activeConversationId}
                 onSelect={handleSelect}
+                profiles={profiles}
                 t={t}
               />
             ))}
@@ -427,6 +441,7 @@ interface ConversationItemProps {
   conversation: Conversation;
   isActive: boolean;
   onSelect: (conversation: Conversation) => void;
+  profiles: Profile[];
   t: ReturnType<typeof useTranslations>;
 }
 
@@ -434,11 +449,17 @@ function ConversationItem({
   conversation,
   isActive,
   onSelect,
+  profiles,
   t,
 }: ConversationItemProps) {
   const contact = conversation.contact;
   const displayName = contact?.name || contact?.phone || t("unknown");
   const initials = displayName.charAt(0).toUpperCase();
+
+  // Resolve assigned agent name from profiles
+  const agentProfile = conversation.assigned_agent_id
+    ? profiles.find((p) => p.user_id === conversation.assigned_agent_id)
+    : null;
 
   const handleClick = useCallback(() => {
     onSelect(conversation);
@@ -498,9 +519,9 @@ function ConversationItem({
             />
           </div>
         </div>
-        {conversation.assigned_agent?.full_name && (
+        {agentProfile?.full_name && (
           <p className="mt-0.5 truncate text-[10px] text-primary">
-            {conversation.assigned_agent.full_name}
+            {agentProfile.full_name}
           </p>
         )}
       </div>

@@ -169,8 +169,6 @@ export interface Conversation {
   created_at: string;
   updated_at: string;
   contact?: Contact;
-  /** Populated when the conversation is fetched with agent profile join. */
-  assigned_agent?: Pick<Profile, "user_id" | "full_name" | "avatar_url">;
   /**
    * AI auto-reply state for this thread (migration 029 + 033):
    *  - `ai_autoreply_disabled` — the bot is paused here (a human took

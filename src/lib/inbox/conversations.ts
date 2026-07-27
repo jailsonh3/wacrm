@@ -1,4 +1,4 @@
-import type { Conversation, Contact, Tag, Profile } from "@/types";
+import type { Conversation, Contact, Tag } from "@/types";
 
 /**
  * Conversation select that embeds the contact plus its tags, so the Inbox
@@ -6,17 +6,17 @@ import type { Conversation, Contact, Tag, Profile } from "@/types";
  * `contact_tags(tags(*))` returns the join rows; {@link normalizeConversation}
  * flattens them onto `contact.tags`.
  *
- * Also joins the assigned agent profile so the conversation list can
- * display the agent's name without a second query.
+ * NOTE: We do NOT join assigned_agent profiles here because there is no
+ * FK constraint between conversations.assigned_agent_id and profiles.user_id.
+ * The conversation list fetches profiles separately and resolves names client-side.
  */
 export const CONVERSATION_SELECT =
-  "*, contact:contacts(*, contact_tags(tags(*))), assigned_agent:profiles!assigned_agent_id(user_id, full_name, avatar_url)";
+  "*, contact:contacts(*, contact_tags(tags(*)))";
 
 /** Raw shape returned by {@link CONVERSATION_SELECT} before flattening. */
 type RawContact = Contact & { contact_tags?: { tags: Tag | null }[] };
-type RawConversation = Omit<Conversation, "contact" | "assigned_agent"> & {
+type RawConversation = Omit<Conversation, "contact"> & {
   contact?: RawContact | null;
-  assigned_agent?: Pick<Profile, "user_id" | "full_name" | "avatar_url"> | null;
 };
 
 /**
@@ -26,14 +26,11 @@ type RawConversation = Omit<Conversation, "contact" | "assigned_agent"> & {
  */
 export function normalizeConversation(raw: RawConversation): Conversation {
   const rawContact = raw.contact;
-  const { assigned_agent, ...rest } = raw;
-
-  if (!rawContact) return { ...rest, assigned_agent: assigned_agent ?? undefined } as Conversation;
+  if (!rawContact) return raw as Conversation;
 
   const { contact_tags, ...contact } = rawContact;
   return {
-    ...rest,
-    assigned_agent: assigned_agent ?? undefined,
+    ...raw,
     contact: {
       ...contact,
       tags: (contact_tags ?? [])
