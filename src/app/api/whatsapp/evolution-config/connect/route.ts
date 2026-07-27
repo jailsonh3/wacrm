@@ -25,7 +25,7 @@ async function resolveAccountId(
 // GET — Get QR code for connecting instance
 // ---------------------------------------------------------------
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
     const supabase = await createClient();
     const {
@@ -58,7 +58,26 @@ export async function GET() {
       return NextResponse.json({ error: 'Missing Evolution API credentials' }, { status: 400 });
     }
 
-    const webhookUrl = `${process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3000'}/api/evolution-webhook`;
+    // Derive webhook URL from the incoming request host — reliable on
+    // Coolify/any reverse proxy. Falls back to NEXT_PUBLIC_SITE_URL,
+    // then to localhost.
+    const origin = (() => {
+      const forwarded = request.headers.get('x-forwarded-origin') || request.headers.get('x-forwarded-host');
+      if (forwarded) {
+        const proto = request.headers.get('x-forwarded-proto') || 'https';
+        return `${proto}://${forwarded}`;
+      }
+      const host = request.headers.get('host');
+      if (host) {
+        const proto = request.headers.get('x-forwarded-proto') || 'https';
+        return `${proto}://${host}`;
+      }
+      return process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3000';
+    })();
+
+    const webhookUrl = `${origin}/api/evolution-webhook`;
+
+    console.log('[evolution-connect] Using webhook URL:', webhookUrl);
 
     try {
       // Always ensure webhook is configured — even for existing instances
@@ -203,6 +222,22 @@ export async function POST(request: Request) {
     if (!credentials) {
       return NextResponse.json({ error: 'Missing Evolution API credentials' }, { status: 400 });
     }
+
+    const origin = (() => {
+      const forwarded = request.headers.get('x-forwarded-origin') || request.headers.get('x-forwarded-host');
+      if (forwarded) {
+        const proto = request.headers.get('x-forwarded-proto') || 'https';
+        return `${proto}://${forwarded}`;
+      }
+      const host = request.headers.get('host');
+      if (host) {
+        const proto = request.headers.get('x-forwarded-proto') || 'https';
+        return `${proto}://${host}`;
+      }
+      return process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3000';
+    })();
+
+    const webhookUrl = `${origin}/api/evolution-webhook`;
 
     try {
       const result = await connectEvolutionInstance({

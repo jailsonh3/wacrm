@@ -487,6 +487,7 @@ export function WhatsAppConfig() {
   async function handleEvolutionGetQrCode() {
     try {
       setEvolutionConnecting(true);
+      setEvolutionQrCode(null);
       const res = await fetch('/api/whatsapp/evolution-config/connect', {
         method: 'GET',
       });
@@ -497,9 +498,18 @@ export function WhatsAppConfig() {
         return;
       }
 
+      if (data.alreadyConnected) {
+        toast.success('Instance is already connected to WhatsApp.');
+        setConnectionStatus('connected');
+        if (accountId) await fetchConfig(accountId);
+        return;
+      }
+
       if (data.qrcode) {
         setEvolutionQrCode(data.qrcode);
         toast.success('QR code loaded. Scan with WhatsApp.');
+      } else {
+        toast.error('No QR code received. Try again.');
       }
     } catch (err) {
       console.error('Evolution QR code error:', err);
