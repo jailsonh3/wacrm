@@ -1,6 +1,10 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { sendTemplateMessage } from '@/lib/whatsapp/meta-api'
+import {
+  sendEvolutionTextMessage,
+  getEvolutionCredentials,
+} from '@/lib/whatsapp/evolution-api'
 import { decrypt } from '@/lib/whatsapp/encryption'
 import type { SendTimeParams } from '@/lib/whatsapp/template-send-builder'
 import { isMessageTemplate } from '@/lib/whatsapp/template-row-guard'
@@ -15,6 +19,7 @@ import {
   rateLimitResponse,
   RATE_LIMITS,
 } from '@/lib/rate-limit'
+import type { WhatsAppProvider } from '@/types'
 
 interface BroadcastResult {
   phone: string
@@ -151,6 +156,19 @@ export async function POST(request: Request) {
     }
 
     const accessToken = decrypt(config.access_token)
+    const provider: WhatsAppProvider = config.provider || 'meta'
+
+    // Load Evolution credentials if needed
+    let evoCreds = null
+    if (provider === 'evolution') {
+      evoCreds = getEvolutionCredentials(config)
+      if (!evoCreds) {
+        return NextResponse.json(
+          { error: 'Evolution API credentials not configured.' },
+          { status: 400 }
+        )
+      }
+    }
 
     // Load the template row once so sendTemplateMessage can build
     // header + button components on each iteration. Loading inside
@@ -192,36 +210,51 @@ export async function POST(request: Request) {
         continue
       }
 
-      // Retry with phone variants on "not in allowed list" so numbers
-      // that differ only in a trunk-prefix 0 still reach recipients.
-      const variants = phoneVariants(sanitized)
       let sentMessageId: string | null = null
       let lastError: string | null = null
 
-      for (const variant of variants) {
+      if (provider === 'evolution' && evoCreds) {
+        // Evolution: send template name as text (no template support)
         try {
-          const result = await sendTemplateMessage({
-            phoneNumberId: config.phone_number_id,
-            accessToken,
-            to: variant,
-            templateName: template_name,
-            language: template_language || 'en_US',
-            template: templateRow ?? undefined,
-            messageParams: recipient.messageParams,
-            params: recipient.params ?? [],
+          const result = await sendEvolutionTextMessage({
+            baseUrl: evoCreds.baseUrl,
+            apiKey: evoCreds.apiKey,
+            instanceName: evoCreds.instanceName,
+            number: sanitized,
+            text: `[Template: ${template_name}]`,
           })
-          sentMessageId = result.messageId
+          sentMessageId = result.key.id
           lastError = null
-          break
         } catch (error) {
-          const errorMessage =
-            error instanceof Error ? error.message : 'Unknown error'
-          if (!isRecipientNotAllowedError(errorMessage)) {
-            lastError = errorMessage
+          lastError = error instanceof Error ? error.message : 'Unknown error'
+        }
+      } else {
+        // Meta: retry with phone variants on "not in allowed list"
+        const variants = phoneVariants(sanitized)
+        for (const variant of variants) {
+          try {
+            const result = await sendTemplateMessage({
+              phoneNumberId: config.phone_number_id,
+              accessToken,
+              to: variant,
+              templateName: template_name,
+              language: template_language || 'en_US',
+              template: templateRow ?? undefined,
+              messageParams: recipient.messageParams,
+              params: recipient.params ?? [],
+            })
+            sentMessageId = result.messageId
+            lastError = null
             break
+          } catch (error) {
+            const errorMessage =
+              error instanceof Error ? error.message : 'Unknown error'
+            if (!isRecipientNotAllowedError(errorMessage)) {
+              lastError = errorMessage
+              break
+            }
+            lastError = errorMessage
           }
-          lastError = errorMessage
-          // retry with next variant
         }
       }
 

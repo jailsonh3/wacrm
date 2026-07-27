@@ -19,6 +19,10 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { sendTemplateMessage } from '@/lib/whatsapp/meta-api';
+import {
+  sendEvolutionTextMessage,
+  getEvolutionCredentials,
+} from '@/lib/whatsapp/evolution-api';
 import { decrypt } from '@/lib/whatsapp/encryption';
 import {
   sanitizePhoneForMeta,
@@ -27,7 +31,7 @@ import {
   isRecipientNotAllowedError,
 } from '@/lib/whatsapp/phone-utils';
 import { isMessageTemplate } from '@/lib/whatsapp/template-row-guard';
-import type { MessageTemplate } from '@/types';
+import type { MessageTemplate, WhatsAppProvider } from '@/types';
 import { findOrCreateContact } from '@/lib/api/v1/contacts';
 
 /** Thrown by createBroadcast on a caller-visible failure; route maps it. */
@@ -64,10 +68,12 @@ interface PlannedRecipient {
 
 export interface BroadcastPlan {
   broadcastId: string;
+  accountId: string;
   templateName: string;
   templateLanguage: string;
   phoneNumberId: string;
   accessToken: string;
+  provider: WhatsAppProvider;
   templateRow: MessageTemplate | null;
   planned: PlannedRecipient[];
   /** Phones rejected up front (invalid E.164) — counted as failed. */
@@ -236,10 +242,12 @@ export async function createBroadcast(
 
   return {
     broadcastId: broadcast.id,
+    accountId,
     templateName,
     templateLanguage,
     phoneNumberId: config.phone_number_id,
     accessToken,
+    provider: (config.provider || 'meta') as WhatsAppProvider,
     templateRow,
     planned,
     rejected,
@@ -265,6 +273,61 @@ export async function deliverBroadcast(
 ): Promise<void> {
   let sentCount = 0;
 
+  // Evolution API: send as plain text (no template support)
+  if (plan.provider === 'evolution') {
+    const { data: config } = await db
+      .from('whatsapp_config')
+      .select('evolution_api_url, evolution_api_key, evolution_instance_name')
+      .eq('account_id', plan.accountId)
+      .maybeSingle();
+
+    const evoCreds = config ? getEvolutionCredentials(config) : null;
+
+    if (!evoCreds) {
+      console.error('[broadcast-core] Evolution credentials not found for account', plan.accountId);
+      await db
+        .from('broadcasts')
+        .update({ status: 'failed', updated_at: new Date().toISOString() })
+        .eq('id', plan.broadcastId);
+      return;
+    }
+
+    for (const recipient of plan.planned) {
+      try {
+        const result = await sendEvolutionTextMessage({
+          baseUrl: evoCreds.baseUrl,
+          apiKey: evoCreds.apiKey,
+          instanceName: evoCreds.instanceName,
+          number: recipient.phone,
+          text: `[Template: ${plan.templateName}]`,
+        });
+        sentCount++;
+        await db
+          .from('broadcast_recipients')
+          .update({
+            status: 'sent',
+            sent_at: new Date().toISOString(),
+            whatsapp_message_id: result.key.id,
+            error_message: null,
+          })
+          .eq('id', recipient.recipientRowId);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unknown error';
+        await db
+          .from('broadcast_recipients')
+          .update({ status: 'failed', error_message: message })
+          .eq('id', recipient.recipientRowId);
+      }
+    }
+
+    await db
+      .from('broadcasts')
+      .update({ status: sentCount > 0 ? 'sent' : 'failed', updated_at: new Date().toISOString() })
+      .eq('id', plan.broadcastId);
+    return;
+  }
+
+  // Meta API path (default)
   for (const recipient of plan.planned) {
     const variants = phoneVariants(recipient.phone);
     let sentMessageId: string | null = null;
@@ -287,7 +350,6 @@ export async function deliverBroadcast(
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Unknown error';
         lastError = message;
-        // Only a "recipient not allowed" error is worth another variant.
         if (!isRecipientNotAllowedError(message)) break;
       }
     }
@@ -306,22 +368,13 @@ export async function deliverBroadcast(
     } else {
       await db
         .from('broadcast_recipients')
-        .update({
-          status: 'failed',
-          error_message: lastError || 'Unknown error',
-        })
+        .update({ status: 'failed', error_message: lastError || 'Unknown error' })
         .eq('id', recipient.recipientRowId);
     }
   }
 
-  // Terminal status only — counts are trigger-owned (see the note
-  // above). If nothing sent, the broadcast failed outright; a partial
-  // send is still 'sent' (per-recipient failures show in failed_count).
   await db
     .from('broadcasts')
-    .update({
-      status: sentCount > 0 ? 'sent' : 'failed',
-      updated_at: new Date().toISOString(),
-    })
+    .update({ status: sentCount > 0 ? 'sent' : 'failed', updated_at: new Date().toISOString() })
     .eq('id', plan.broadcastId);
 }

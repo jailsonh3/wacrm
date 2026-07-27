@@ -7,6 +7,11 @@ import {
   type InteractiveListSection,
   type MediaKind,
 } from '@/lib/whatsapp/meta-api'
+import {
+  sendEvolutionTextMessage,
+  sendEvolutionMediaMessage,
+  getEvolutionCredentials,
+} from '@/lib/whatsapp/evolution-api'
 import type { InteractiveMessagePayload } from '@/lib/whatsapp/interactive'
 import { decrypt } from '@/lib/whatsapp/encryption'
 import {
@@ -16,51 +21,27 @@ import {
   isRecipientNotAllowedError,
 } from '@/lib/whatsapp/phone-utils'
 import { supabaseAdmin } from './admin-client'
+import type { WhatsAppProvider } from '@/types'
 
 // ------------------------------------------------------------
-// Flows-side Meta sender (interactive variants).
+// Flows-side sender — supports both Meta and Evolution providers.
 //
-// Mirrors src/lib/automations/meta-send.ts (engineSendText /
-// engineSendTemplate) but emits interactive button + list messages.
-// Kept separate from the automations file so the two engines don't
-// fight over each other's shape — once both stabilize, the
-// phone-variant retry + DB persistence are obvious extraction
-// candidates into a shared base.
-//
-// PR #1 ships this in isolation: callers don't exist yet. PR #2
-// brings the flow runner online and wires it up. Shipping it now
-// keeps the foundation PR self-contained and unit-testable.
+// Each public function checks config.provider and routes to the
+// appropriate API. Evolution doesn't support interactive buttons/
+// lists or templates, so those fall back to plain text.
 // ------------------------------------------------------------
 
 interface SendTextEngineArgs {
-  /** Account-level tenancy key. Drives contact + whatsapp_config
-   *  lookups so a flow authored by user A still sends through the
-   *  WhatsApp number user B saved on the same account. */
   accountId: string
-  /** Original author of the flow — used for INSERT audit columns
-   *  and for resolving the agent's identity in logs. Not consulted
-   *  for tenancy. */
   userId: string
   conversationId: string
   contactId: string
   text: string
-  /** Marks the persisted message row `ai_generated = true` so the inbox
-   *  badges it as an AI reply. Only the auto-reply bot sets this;
-   *  deterministic Flow/automation sends leave it false. */
   aiGenerated?: boolean
 }
 
 /**
  * Send a plain-text WhatsApp message from the Flows engine.
- *
- * Used by the runner's `send_message` and `collect_input` nodes —
- * both prompt the customer with text and either auto-advance (the
- * send_message case) or suspend awaiting a text reply (collect_input).
- *
- * Wraps the same phone-variant retry + DB persistence pattern as the
- * interactive senders; the duplication will be DRY'd into a shared
- * `engineSendBase` once the v2 features (templates with variables,
- * media sends) settle.
  */
 export async function engineSendText(
   args: SendTextEngineArgs,
@@ -91,38 +72,47 @@ export async function engineSendText(
     throw new Error('WhatsApp not configured for this account')
   }
 
-  const accessToken = decrypt(config.access_token)
+  const provider: WhatsAppProvider = config.provider || 'meta'
+  let waMessageId = ''
 
-  const attempt = async (phone: string): Promise<string> => {
-    const r = await sendTextMessage({
-      phoneNumberId: config.phone_number_id,
-      accessToken,
-      to: phone,
+  if (provider === 'evolution') {
+    const credentials = getEvolutionCredentials(config)
+    if (!credentials) throw new Error('Evolution API credentials not configured')
+
+    const result = await sendEvolutionTextMessage({
+      baseUrl: credentials.baseUrl,
+      apiKey: credentials.apiKey,
+      instanceName: credentials.instanceName,
+      number: sanitized,
       text: args.text,
     })
-    return r.messageId
-  }
-
-  const variants = phoneVariants(sanitized)
-  let workingPhone = sanitized
-  let waMessageId = ''
-  let lastError: unknown = null
-  for (const v of variants) {
-    try {
-      waMessageId = await attempt(v)
-      workingPhone = v
-      lastError = null
-      break
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
-      if (!isRecipientNotAllowedError(msg)) throw err
-      lastError = err
+    waMessageId = result.key.id
+  } else {
+    const accessToken = decrypt(config.access_token)
+    const attempt = async (phone: string): Promise<string> => {
+      const r = await sendTextMessage({
+        phoneNumberId: config.phone_number_id,
+        accessToken,
+        to: phone,
+        text: args.text,
+      })
+      return r.messageId
     }
-  }
-  if (lastError) throw lastError
 
-  if (workingPhone !== sanitized) {
-    await db.from('contacts').update({ phone: workingPhone }).eq('id', contact.id)
+    const variants = phoneVariants(sanitized)
+    let lastError: unknown = null
+    for (const v of variants) {
+      try {
+        waMessageId = await attempt(v)
+        lastError = null
+        break
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        if (!isRecipientNotAllowedError(msg)) throw err
+        lastError = err
+      }
+    }
+    if (lastError) throw lastError
   }
 
   const { error: msgErr } = await db.from('messages').insert({
@@ -135,7 +125,7 @@ export async function engineSendText(
     ai_generated: args.aiGenerated ?? false,
   })
   if (msgErr) {
-    throw new Error(`sent to Meta but DB insert failed: ${msgErr.message}`)
+    throw new Error(`DB insert failed: ${msgErr.message}`)
   }
 
   await db
@@ -156,21 +146,13 @@ interface SendMediaEngineArgs {
   conversationId: string
   contactId: string
   kind: MediaKind
-  /** Public URL Meta fetches at send time. */
   link: string
   caption?: string
-  /** Document-only; ignored by Meta for image/video. */
   filename?: string
 }
 
 /**
  * Send an image / video / document from the Flows engine.
- *
- * Used by the runner's `send_media` node. Auto-advances after the
- * send lands (same suspend semantics as send_message). Same
- * phone-variant retry + DB persistence as the text/interactive
- * senders; persists the outgoing message with `content_type` matching
- * the media kind so the inbox renders the right preview.
  */
 export async function engineSendMedia(
   args: SendMediaEngineArgs,
@@ -201,47 +183,63 @@ export async function engineSendMedia(
     throw new Error('WhatsApp not configured for this account')
   }
 
-  const accessToken = decrypt(config.access_token)
-
-  const attempt = async (phone: string): Promise<string> => {
-    const r = await sendMediaMessage({
-      phoneNumberId: config.phone_number_id,
-      accessToken,
-      to: phone,
-      kind: args.kind,
-      link: args.link,
-      caption: args.caption,
-      filename: args.filename,
-    })
-    return r.messageId
-  }
-
-  const variants = phoneVariants(sanitized)
-  let workingPhone = sanitized
+  const provider: WhatsAppProvider = config.provider || 'meta'
   let waMessageId = ''
-  let lastError: unknown = null
-  for (const v of variants) {
-    try {
-      waMessageId = await attempt(v)
-      workingPhone = v
-      lastError = null
-      break
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
-      if (!isRecipientNotAllowedError(msg)) throw err
-      lastError = err
+
+  if (provider === 'evolution') {
+    const credentials = getEvolutionCredentials(config)
+    if (!credentials) throw new Error('Evolution API credentials not configured')
+
+    const mimetypeMap: Record<string, string> = {
+      audio: 'audio/ogg',
+      image: 'image/jpeg',
+      video: 'video/mp4',
+      document: 'application/pdf',
     }
-  }
-  if (lastError) throw lastError
 
-  if (workingPhone !== sanitized) {
-    await db.from('contacts').update({ phone: workingPhone }).eq('id', contact.id)
+    const result = await sendEvolutionMediaMessage({
+      baseUrl: credentials.baseUrl,
+      apiKey: credentials.apiKey,
+      instanceName: credentials.instanceName,
+      number: sanitized,
+      mediatype: args.kind as 'image' | 'video' | 'document' | 'audio',
+      media: args.link,
+      caption: args.caption,
+      fileName: args.filename,
+      mimetype: mimetypeMap[args.kind] || undefined,
+    })
+    waMessageId = result.key.id
+  } else {
+    const accessToken = decrypt(config.access_token)
+    const attempt = async (phone: string): Promise<string> => {
+      const r = await sendMediaMessage({
+        phoneNumberId: config.phone_number_id,
+        accessToken,
+        to: phone,
+        kind: args.kind,
+        link: args.link,
+        caption: args.caption,
+        filename: args.filename,
+      })
+      return r.messageId
+    }
+
+    const variants = phoneVariants(sanitized)
+    let lastError: unknown = null
+    for (const v of variants) {
+      try {
+        waMessageId = await attempt(v)
+        lastError = null
+        break
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        if (!isRecipientNotAllowedError(msg)) throw err
+        lastError = err
+      }
+    }
+    if (lastError) throw lastError
   }
 
-  // content_type='image'|'video'|'document' — these are already in the
-  // messages_content_type_check constraint (migration 001 + 010).
-  // content_text carries the caption (or empty) so the conversation
-  // list preview shows something meaningful when the user glances at it.
   const preview = args.caption?.trim() || `[${args.kind}]`
   const { error: msgErr } = await db.from('messages').insert({
     conversation_id: args.conversationId,
@@ -252,7 +250,7 @@ export async function engineSendMedia(
     status: 'sent',
   })
   if (msgErr) {
-    throw new Error(`sent to Meta but DB insert failed: ${msgErr.message}`)
+    throw new Error(`DB insert failed: ${msgErr.message}`)
   }
 
   await db
@@ -290,27 +288,12 @@ interface SendInteractiveListEngineArgs {
   footerText?: string
 }
 
-/**
- * Send an interactive-button WhatsApp message from the Flows engine.
- *
- * Persists the outgoing message to `messages` with
- * `content_type='interactive'` and `sender_type='bot'` so the inbox
- * surfaces it with the "Button reply" affordance and the conversation
- * thread reflects the bot's prompt.
- *
- * Returns the Meta message id so the caller (engine) can stash it on
- * the `flow_runs.last_prompt_message_id` field for later reference.
- */
 export async function engineSendInteractiveButtons(
   args: SendInteractiveButtonsEngineArgs,
 ): Promise<{ whatsapp_message_id: string }> {
   return sendInteractiveViaMeta({ ...args, kind: 'buttons' })
 }
 
-/**
- * Send an interactive-list WhatsApp message from the Flows engine.
- * Used when the flow needs more than 3 options (Meta's button cap).
- */
 export async function engineSendInteractiveList(
   args: SendInteractiveListEngineArgs,
 ): Promise<{ whatsapp_message_id: string }> {
@@ -326,9 +309,6 @@ async function sendInteractiveViaMeta(
 ): Promise<{ whatsapp_message_id: string }> {
   const db = supabaseAdmin()
 
-  // Scope the contact + whatsapp_config lookups by account_id —
-  // same defense-in-depth rationale as automations/meta-send.ts.
-  // Migration 017 moved both tables to account-scoped tenancy.
   const { data: contact, error: contactErr } = await db
     .from('contacts')
     .select('id, phone')
@@ -353,70 +333,67 @@ async function sendInteractiveViaMeta(
     throw new Error('WhatsApp not configured for this account')
   }
 
-  const accessToken = decrypt(config.access_token)
+  const provider: WhatsAppProvider = config.provider || 'meta'
+  let waMessageId = ''
 
-  const attempt = async (phone: string): Promise<string> => {
-    if (input.kind === 'buttons') {
-      const r = await sendInteractiveButtons({
+  // Evolution API doesn't support interactive buttons/lists —
+  // fall back to sending the body text as a plain message.
+  if (provider === 'evolution') {
+    const credentials = getEvolutionCredentials(config)
+    if (!credentials) throw new Error('Evolution API credentials not configured')
+
+    const result = await sendEvolutionTextMessage({
+      baseUrl: credentials.baseUrl,
+      apiKey: credentials.apiKey,
+      instanceName: credentials.instanceName,
+      number: sanitized,
+      text: input.bodyText,
+    })
+    waMessageId = result.key.id
+  } else {
+    const accessToken = decrypt(config.access_token)
+    const attempt = async (phone: string): Promise<string> => {
+      if (input.kind === 'buttons') {
+        const r = await sendInteractiveButtons({
+          phoneNumberId: config.phone_number_id,
+          accessToken,
+          to: phone,
+          bodyText: input.bodyText,
+          buttons: input.buttons,
+          headerText: input.headerText,
+          footerText: input.footerText,
+        })
+        return r.messageId
+      }
+      const r = await sendInteractiveList({
         phoneNumberId: config.phone_number_id,
         accessToken,
         to: phone,
         bodyText: input.bodyText,
-        buttons: input.buttons,
+        buttonLabel: input.buttonLabel,
+        sections: input.sections,
         headerText: input.headerText,
         footerText: input.footerText,
       })
       return r.messageId
     }
-    const r = await sendInteractiveList({
-      phoneNumberId: config.phone_number_id,
-      accessToken,
-      to: phone,
-      bodyText: input.bodyText,
-      buttonLabel: input.buttonLabel,
-      sections: input.sections,
-      headerText: input.headerText,
-      footerText: input.footerText,
-    })
-    return r.messageId
-  }
 
-  // Same phone-variant retry as automations/meta-send.ts. Numbers
-  // registered with/without a trunk 0 + Meta's sandbox quirks all
-  // need this to reliably land a message.
-  const variants = phoneVariants(sanitized)
-  let workingPhone = sanitized
-  let waMessageId = ''
-  let lastError: unknown = null
-  for (const v of variants) {
-    try {
-      waMessageId = await attempt(v)
-      workingPhone = v
-      lastError = null
-      break
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
-      if (!isRecipientNotAllowedError(msg)) throw err
-      lastError = err
+    const variants = phoneVariants(sanitized)
+    let lastError: unknown = null
+    for (const v of variants) {
+      try {
+        waMessageId = await attempt(v)
+        lastError = null
+        break
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        if (!isRecipientNotAllowedError(msg)) throw err
+        lastError = err
+      }
     }
-  }
-  if (lastError) throw lastError
-
-  if (workingPhone !== sanitized) {
-    await db.from('contacts').update({ phone: workingPhone }).eq('id', contact.id)
+    if (lastError) throw lastError
   }
 
-  // Persist the bot's prompt to the messages table so it appears in
-  // the inbox. content_type='interactive' is supported as of
-  // migration 010; sender_type='bot' distinguishes flow sends from
-  // manual agent sends (the conversation list preview will pick up
-  // last_message_text as a sensible summary).
-  //
-  // We do NOT set interactive_reply_id here — that column is reserved
-  // for the customer's tap on this message, populated by the webhook
-  // when their reply arrives. We DO persist the structured payload so
-  // the inbox thread re-renders the buttons/rows the bot sent (round-
-  // trip), matching the composer + automation send paths.
   const interactivePayload: InteractiveMessagePayload =
     input.kind === 'buttons'
       ? {
@@ -445,7 +422,7 @@ async function sendInteractiveViaMeta(
     status: 'sent',
   })
   if (msgErr) {
-    throw new Error(`sent to Meta but DB insert failed: ${msgErr.message}`)
+    throw new Error(`DB insert failed: ${msgErr.message}`)
   }
 
   await db
