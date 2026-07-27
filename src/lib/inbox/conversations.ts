@@ -1,18 +1,22 @@
-import type { Conversation, Contact, Tag } from "@/types";
+import type { Conversation, Contact, Tag, Profile } from "@/types";
 
 /**
  * Conversation select that embeds the contact plus its tags, so the Inbox
  * can filter conversations by contact tag without a second round-trip.
  * `contact_tags(tags(*))` returns the join rows; {@link normalizeConversation}
  * flattens them onto `contact.tags`.
+ *
+ * Also joins the assigned agent profile so the conversation list can
+ * display the agent's name without a second query.
  */
 export const CONVERSATION_SELECT =
-  "*, contact:contacts(*, contact_tags(tags(*)))";
+  "*, contact:contacts(*, contact_tags(tags(*))), assigned_agent:profiles!assigned_agent_id(user_id, full_name, avatar_url)";
 
 /** Raw shape returned by {@link CONVERSATION_SELECT} before flattening. */
 type RawContact = Contact & { contact_tags?: { tags: Tag | null }[] };
-type RawConversation = Omit<Conversation, "contact"> & {
+type RawConversation = Omit<Conversation, "contact" | "assigned_agent"> & {
   contact?: RawContact | null;
+  assigned_agent?: Pick<Profile, "user_id" | "full_name" | "avatar_url"> | null;
 };
 
 /**
@@ -22,11 +26,14 @@ type RawConversation = Omit<Conversation, "contact"> & {
  */
 export function normalizeConversation(raw: RawConversation): Conversation {
   const rawContact = raw.contact;
-  if (!rawContact) return raw as Conversation;
+  const { assigned_agent, ...rest } = raw;
+
+  if (!rawContact) return { ...rest, assigned_agent: assigned_agent ?? undefined } as Conversation;
 
   const { contact_tags, ...contact } = rawContact;
   return {
-    ...raw,
+    ...rest,
+    assigned_agent: assigned_agent ?? undefined,
     contact: {
       ...contact,
       tags: (contact_tags ?? [])

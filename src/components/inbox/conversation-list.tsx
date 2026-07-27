@@ -498,6 +498,11 @@ function ConversationItem({
             />
           </div>
         </div>
+        {conversation.assigned_agent?.full_name && (
+          <p className="mt-0.5 truncate text-[10px] text-primary">
+            {conversation.assigned_agent.full_name}
+          </p>
+        )}
       </div>
     </button>
   );

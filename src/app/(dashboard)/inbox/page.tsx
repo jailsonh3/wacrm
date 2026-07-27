@@ -327,10 +327,13 @@ function InboxPageInner() {
           hydrateConversation(conv.id);
         }
 
-        // Update active conversation if it changed
+        // Update active conversation if it changed — also suppress
+        // unread_count here so the MessageThread doesn't re-render with
+        // a positive value that would flash the badge / re-trigger the
+        // reset effect.
         if (activeConversation && conv.id === activeConversation.id) {
           setActiveConversation((prev) =>
-            prev ? { ...prev, ...conv } : prev
+            prev ? { ...prev, ...conv, unread_count: 0 } : prev
           );
         }
       }

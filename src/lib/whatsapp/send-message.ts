@@ -350,6 +350,12 @@ export async function sendMessageToConversation(
       }
 
       if (isMediaKind) {
+        const mimetypeMap: Record<string, string> = {
+          audio: 'audio/ogg',
+          image: 'image/jpeg',
+          video: 'video/mp4',
+          document: 'application/pdf',
+        };
         const result = await sendEvolutionMediaMessage({
           baseUrl: credentials.baseUrl,
           apiKey: credentials.apiKey,
@@ -359,6 +365,7 @@ export async function sendMessageToConversation(
           media: mediaUrl!,
           caption: contentText || undefined,
           fileName: filename || undefined,
+          mimetype: mimetypeMap[messageType] || undefined,
         });
         return result.key.id;
       }
