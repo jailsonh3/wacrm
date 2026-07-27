@@ -91,9 +91,12 @@ export async function GET() {
 async function processEvolutionEvent(event: EvolutionWebhookEvent) {
   const { event: eventType, instance, data } = event;
 
-  if (eventType === 'messages.upsert') {
+  // Evolution API v2 uses UPPERCASE event names
+  const normalizedEvent = eventType?.toUpperCase();
+
+  if (normalizedEvent === 'MESSAGES_UPSERT') {
     await handleMessageUpsert(instance, data);
-  } else if (eventType === 'connection.update') {
+  } else if (normalizedEvent === 'CONNECTION_UPDATE') {
     await handleConnectionUpdate(instance, data as { state?: string; statusReason?: number });
   }
 }

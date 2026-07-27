@@ -119,7 +119,7 @@ export async function createEvolutionInstance(params: {
     number,
     integration = 'WHATSAPP-BAILEYS',
     webhookUrl,
-    webhookEvents = ['messages.upsert', 'connection.update'],
+    webhookEvents = ['MESSAGES_UPSERT', 'CONNECTION_UPDATE'],
   } = params;
 
   return evolutionFetch<EvolutionInstance>(baseUrl, apiKey, '/instance/create', {
@@ -148,12 +148,12 @@ export async function getEvolutionInstances(params: {
   apiKey: string;
 }): Promise<EvolutionInstanceInfo[]> {
   const { baseUrl, apiKey } = params;
-  const result = await evolutionFetch<{ data: EvolutionInstanceInfo[] }>(
+  const result = await evolutionFetch<EvolutionInstanceInfo[]>(
     baseUrl,
     apiKey,
-    '/instance/all'
+    '/instance/fetchInstances'
   );
-  return result.data ?? [];
+  return Array.isArray(result) ? result : [];
 }
 
 /**
@@ -221,6 +221,41 @@ export async function disconnectEvolutionInstance(params: {
   await evolutionFetch(baseUrl, apiKey, `/instance/delete/${instanceName}`, {
     method: 'DELETE',
   });
+}
+
+/**
+ * Set or update the webhook URL for an Evolution instance.
+ */
+export async function setEvolutionWebhook(params: {
+  baseUrl: string;
+  apiKey: string;
+  instanceName: string;
+  webhookUrl: string;
+  webhookEvents?: string[];
+}): Promise<unknown> {
+  const { baseUrl, apiKey, instanceName, webhookUrl, webhookEvents = ['MESSAGES_UPSERT', 'CONNECTION_UPDATE'] } = params;
+  return evolutionFetch<unknown>(baseUrl, apiKey, `/webhook/set/${instanceName}`, {
+    method: 'POST',
+    body: JSON.stringify({
+      webhook: {
+        enabled: true,
+        url: webhookUrl,
+        events: webhookEvents,
+      },
+    }),
+  });
+}
+
+/**
+ * Fetch a single instance's info (includes webhook config).
+ */
+export async function fetchEvolutionInstance(params: {
+  baseUrl: string;
+  apiKey: string;
+  instanceName: string;
+}): Promise<EvolutionInstanceInfo | null> {
+  const instances = await getEvolutionInstances(params);
+  return instances.find((i) => i.name === params.instanceName) ?? null;
 }
 
 // ---------------------------------------------------------------

@@ -4,6 +4,7 @@ import {
   createEvolutionInstance,
   getEvolutionQrCode,
   connectEvolutionInstance,
+  setEvolutionWebhook,
   getEvolutionCredentials,
 } from '@/lib/whatsapp/evolution-api';
 
@@ -57,7 +58,19 @@ export async function GET() {
       return NextResponse.json({ error: 'Missing Evolution API credentials' }, { status: 400 });
     }
 
+    const webhookUrl = `${process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3000'}/api/whatsapp/evolution-webhook`;
+
     try {
+      // Always ensure webhook is configured — even for existing instances
+      await setEvolutionWebhook({
+        baseUrl: credentials.baseUrl,
+        apiKey: credentials.apiKey,
+        instanceName: credentials.instanceName,
+        webhookUrl,
+      }).catch(() => {
+        // Ignore errors — instance might not exist yet
+      });
+
       const qrCode = await getEvolutionQrCode({
         baseUrl: credentials.baseUrl,
         apiKey: credentials.apiKey,
@@ -71,16 +84,21 @@ export async function GET() {
         count: qrCode.count,
       });
     } catch {
-      const webhookUrl = `${process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3000'}/api/whatsapp/evolution-webhook`;
-
       try {
         const newInstance = await createEvolutionInstance({
           baseUrl: credentials.baseUrl,
           apiKey: credentials.apiKey,
           instanceName: credentials.instanceName,
           webhookUrl,
-          webhookEvents: ['messages.upsert', 'connection.update'],
         });
+
+        // Set webhook explicitly on new instance
+        await setEvolutionWebhook({
+          baseUrl: credentials.baseUrl,
+          apiKey: credentials.apiKey,
+          instanceName: credentials.instanceName,
+          webhookUrl,
+        }).catch(() => {});
 
         await supabase
           .from('whatsapp_config')
