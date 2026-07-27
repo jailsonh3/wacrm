@@ -96,8 +96,9 @@ export async function GET() {
 async function processEvolutionEvent(event: EvolutionWebhookEvent) {
   const { event: eventType, instance, data } = event;
 
-  // Evolution API v2 uses UPPERCASE event names
-  const normalizedEvent = eventType?.toUpperCase();
+  // Evolution API sends events as "messages.upsert" (dot-separated, lowercase).
+  // Normalize to UPPERCASE_UNDERSCORE for matching.
+  const normalizedEvent = eventType?.toUpperCase().replace(/\./g, '_');
 
   console.log(`[evolution-webhook] Processing event: ${normalizedEvent} on instance: ${instance}`);
 
