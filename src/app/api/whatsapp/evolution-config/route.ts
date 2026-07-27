@@ -78,13 +78,16 @@ export async function GET() {
 
       const isConnected = instanceState.state === 'open';
 
-      await supabase
-        .from('whatsapp_config')
-        .update({
-          status: isConnected ? 'connected' : 'disconnected',
-          connected_at: isConnected ? new Date().toISOString() : null,
-        })
-        .eq('id', config.id);
+      if (config.status !== (isConnected ? 'connected' : 'disconnected')) {
+        await supabase
+          .from('whatsapp_config')
+          .update({
+            status: isConnected ? 'connected' : 'disconnected',
+            connected_at: isConnected ? new Date().toISOString() : null,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', config.id);
+      }
 
       return NextResponse.json({
         connected: isConnected,
@@ -94,9 +97,13 @@ export async function GET() {
         statusReason: instanceState.statusReason,
       });
     } catch (error) {
+      console.warn('[evolution-config] Failed to check instance state:', error);
+      // Instance might not exist yet — return disconnected
       return NextResponse.json({
         connected: false,
         configured: true,
+        status: 'unknown',
+        instanceName: credentials.instanceName,
         message: error instanceof Error ? error.message : 'Failed to check status',
       });
     }

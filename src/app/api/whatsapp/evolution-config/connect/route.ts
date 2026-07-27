@@ -77,6 +77,24 @@ export async function GET() {
         instanceName: credentials.instanceName,
       });
 
+      // Already connected — no QR needed
+      if (qrCode.alreadyConnected) {
+        await supabase
+          .from('whatsapp_config')
+          .update({
+            status: 'connected',
+            connected_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', config.id);
+
+        return NextResponse.json({
+          success: true,
+          alreadyConnected: true,
+          message: 'Instance is already connected',
+        });
+      }
+
       return NextResponse.json({
         success: true,
         qrcode: qrCode.base64,
@@ -84,6 +102,7 @@ export async function GET() {
         count: qrCode.count,
       });
     } catch {
+      // Instance doesn't exist yet — create it
       try {
         const newInstance = await createEvolutionInstance({
           baseUrl: credentials.baseUrl,
@@ -110,8 +129,8 @@ export async function GET() {
 
         return NextResponse.json({
           success: true,
-          qrcode: newInstance.qrcode?.base64,
-          code: newInstance.qrcode?.code,
+          qrcode: newInstance.qrcode?.base64 ?? '',
+          code: newInstance.qrcode?.code ?? '',
           count: newInstance.qrcode?.count ?? 1,
           instance: newInstance.instanceName,
         });
@@ -185,6 +204,25 @@ export async function POST(request: Request) {
         instanceName: credentials.instanceName,
         number,
       });
+
+      // Already connected
+      if (result.alreadyConnected) {
+        await supabase
+          .from('whatsapp_config')
+          .update({
+            phone_number_id: credentials.instanceName,
+            status: 'connected',
+            connected_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', config.id);
+
+        return NextResponse.json({
+          success: true,
+          alreadyConnected: true,
+          message: 'Instance is already connected',
+        });
+      }
 
       await supabase
         .from('whatsapp_config')

@@ -2,19 +2,20 @@
 // Evolution API client — REST wrapper for WhatsApp via Baileys
 //
 // Provides functions to manage instances and send messages
-// through the Evolution API (https://github.com/evolution-foundation/evolution-go).
+// through the Evolution API v2.3.7.
 // ============================================================
 
 import { decrypt } from '@/lib/whatsapp/encryption';
 
 export interface EvolutionSendResult {
-  messageId: string;
   key: {
     remoteJid: string;
     fromMe: boolean;
     id: string;
   };
-  status: string;
+  message?: Record<string, unknown>;
+  messageTimestamp?: string;
+  status?: string;
 }
 
 interface EvolutionApiError {
@@ -73,6 +74,7 @@ export interface EvolutionInstance {
   instanceId: string;
   integration: string;
   status: string;
+  hash?: string;
   qrcode?: {
     pairingCode: string | null;
     code: string;
@@ -83,7 +85,8 @@ export interface EvolutionInstance {
 
 export interface EvolutionInstanceInfo {
   id: string;
-  name: string;
+  name?: string;
+  instanceName?: string;
   token: string;
   webhook: string;
   connected: boolean;
@@ -102,6 +105,7 @@ export interface EvolutionInstanceInfo {
 
 /**
  * Create a new Evolution API instance for a WhatsApp account.
+ * v2.3.7 response: { instance, hash, webhook, websocket, rabbitmq, nats, sqs, settings, qrcode }
  */
 export async function createEvolutionInstance(params: {
   baseUrl: string;
@@ -122,7 +126,11 @@ export async function createEvolutionInstance(params: {
     webhookEvents = ['MESSAGES_UPSERT', 'CONNECTION_UPDATE'],
   } = params;
 
-  return evolutionFetch<EvolutionInstance>(baseUrl, apiKey, '/instance/create', {
+  const raw = await evolutionFetch<{
+    instance?: { instanceName: string; instanceId: string; integration: string; status: string };
+    hash?: string;
+    qrcode?: { pairingCode: string | null; code: string; base64: string; count: number };
+  }>(baseUrl, apiKey, '/instance/create', {
     method: 'POST',
     body: JSON.stringify({
       instanceName,
@@ -138,10 +146,20 @@ export async function createEvolutionInstance(params: {
         : undefined,
     }),
   });
+
+  return {
+    instanceName: raw.instance?.instanceName ?? instanceName,
+    instanceId: raw.instance?.instanceId ?? '',
+    integration: raw.instance?.integration ?? integration,
+    status: raw.instance?.status ?? 'connecting',
+    hash: raw.hash,
+    qrcode: raw.qrcode,
+  };
 }
 
 /**
  * Get all Evolution API instances.
+ * v2.3.7 response: array of instance objects
  */
 export async function getEvolutionInstances(params: {
   baseUrl: string;
@@ -158,6 +176,7 @@ export async function getEvolutionInstances(params: {
 
 /**
  * Get connection state of an Evolution instance.
+ * v2.3.7 response: { instance: { instanceName, state } }
  */
 export async function getEvolutionInstanceState(params: {
   baseUrl: string;
@@ -165,40 +184,66 @@ export async function getEvolutionInstanceState(params: {
   instanceName: string;
 }): Promise<{ state: string; statusReason?: number }> {
   const { baseUrl, apiKey, instanceName } = params;
-  return evolutionFetch<{ state: string; statusReason?: number }>(
-    baseUrl,
-    apiKey,
-    `/instance/connectionState/${instanceName}`
-  );
+  const raw = await evolutionFetch<{
+    instance?: { instanceName: string; state: string };
+    state?: string;
+    statusReason?: number;
+  }>(baseUrl, apiKey, `/instance/connectionState/${instanceName}`);
+
+  // v2.3.7 wraps in { instance: { state } } but handle flat too
+  const state = raw.instance?.state ?? raw.state ?? 'close';
+  return { state, statusReason: raw.statusReason };
 }
 
 /**
  * Get QR code for connecting an Evolution instance.
+ * v2.3.7 response when connecting: { pairingCode, code, base64, count }
+ * v2.3.7 response when already connected: { instance: { instanceName, state: "open" } }
  */
 export async function getEvolutionQrCode(params: {
   baseUrl: string;
   apiKey: string;
   instanceName: string;
-}): Promise<{ base64: string; code: string; count: number }> {
+}): Promise<{ base64: string; code: string; count: number; alreadyConnected?: boolean }> {
   const { baseUrl, apiKey, instanceName } = params;
-  return evolutionFetch<{ base64: string; code: string; count: number }>(
-    baseUrl,
-    apiKey,
-    `/instance/connect/${instanceName}`
-  );
+  const raw = await evolutionFetch<{
+    pairingCode?: string | null;
+    code?: string;
+    base64?: string;
+    count?: number;
+    instance?: { instanceName: string; state: string };
+  }>(baseUrl, apiKey, `/instance/connect/${instanceName}`);
+
+  // Already connected — no QR code needed
+  if (raw.instance?.state === 'open') {
+    return { base64: '', code: '', count: 0, alreadyConnected: true };
+  }
+
+  return {
+    base64: raw.base64 ?? '',
+    code: raw.code ?? '',
+    count: raw.count ?? 0,
+    alreadyConnected: false,
+  };
 }
 
 /**
  * Connect an Evolution instance using a pairing code (phone number).
+ * v2.3.7 response: { pairingCode, code, base64 } or { instance: { state: "open" } }
  */
 export async function connectEvolutionInstance(params: {
   baseUrl: string;
   apiKey: string;
   instanceName: string;
   number: string;
-}): Promise<{ pairingCode: string | null; code: string; base64: string }> {
+}): Promise<{ pairingCode: string | null; code: string; base64: string; alreadyConnected?: boolean }> {
   const { baseUrl, apiKey, instanceName, number } = params;
-  return evolutionFetch<{ pairingCode: string | null; code: string; base64: string }>(
+  const raw = await evolutionFetch<{
+    pairingCode?: string | null;
+    code?: string;
+    base64?: string;
+    instance?: { instanceName: string; state: string };
+  }>(
     baseUrl,
     apiKey,
     `/instance/connect/${instanceName}`,
@@ -207,6 +252,18 @@ export async function connectEvolutionInstance(params: {
       body: JSON.stringify({ number }),
     }
   );
+
+  // Already connected
+  if (raw.instance?.state === 'open') {
+    return { pairingCode: null, code: '', base64: '', alreadyConnected: true };
+  }
+
+  return {
+    pairingCode: raw.pairingCode ?? null,
+    code: raw.code ?? '',
+    base64: raw.base64 ?? '',
+    alreadyConnected: false,
+  };
 }
 
 /**
@@ -225,6 +282,7 @@ export async function disconnectEvolutionInstance(params: {
 
 /**
  * Set or update the webhook URL for an Evolution instance.
+ * v2.3.7 expects flat body: { enabled, url, events } (NOT nested under "webhook")
  */
 export async function setEvolutionWebhook(params: {
   baseUrl: string;
@@ -237,11 +295,9 @@ export async function setEvolutionWebhook(params: {
   return evolutionFetch<unknown>(baseUrl, apiKey, `/webhook/set/${instanceName}`, {
     method: 'POST',
     body: JSON.stringify({
-      webhook: {
-        enabled: true,
-        url: webhookUrl,
-        events: webhookEvents,
-      },
+      enabled: true,
+      url: webhookUrl,
+      events: webhookEvents,
     }),
   });
 }
@@ -255,7 +311,9 @@ export async function fetchEvolutionInstance(params: {
   instanceName: string;
 }): Promise<EvolutionInstanceInfo | null> {
   const instances = await getEvolutionInstances(params);
-  return instances.find((i) => i.name === params.instanceName) ?? null;
+  return instances.find(
+    (i) => (i.name ?? i.instanceName) === params.instanceName
+  ) ?? null;
 }
 
 // ---------------------------------------------------------------
@@ -264,6 +322,7 @@ export async function fetchEvolutionInstance(params: {
 
 /**
  * Send a text message via Evolution API.
+ * v2.3.7 request: { number, textMessage: { text }, delay?, linkPreview?, quoted? }
  */
 export async function sendEvolutionTextMessage(params: {
   baseUrl: string;

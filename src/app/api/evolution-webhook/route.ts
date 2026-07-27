@@ -60,6 +60,11 @@ export async function POST(request: Request) {
     const body = await request.json();
     const events = Array.isArray(body) ? body : [body];
 
+    console.log(
+      `[evolution-webhook] Received ${events.length} event(s):`,
+      events.map((e: EvolutionWebhookEvent) => `${e.event} on ${e.instance}`).join(', ')
+    );
+
     // Process each event asynchronously
     for (const event of events) {
       await processEvolutionEvent(event);
@@ -94,10 +99,14 @@ async function processEvolutionEvent(event: EvolutionWebhookEvent) {
   // Evolution API v2 uses UPPERCASE event names
   const normalizedEvent = eventType?.toUpperCase();
 
+  console.log(`[evolution-webhook] Processing event: ${normalizedEvent} on instance: ${instance}`);
+
   if (normalizedEvent === 'MESSAGES_UPSERT') {
     await handleMessageUpsert(instance, data);
   } else if (normalizedEvent === 'CONNECTION_UPDATE') {
     await handleConnectionUpdate(instance, data as { state?: string; statusReason?: number });
+  } else {
+    console.log(`[evolution-webhook] Ignoring event: ${normalizedEvent}`);
   }
 }
 
@@ -107,8 +116,15 @@ async function handleMessageUpsert(
 ) {
   const { key, message, messageTimestamp } = data;
 
+  console.log(
+    `[evolution-webhook] Message upsert: fromMe=${key.fromMe}, jid=${key.remoteJid}, id=${key.id}`
+  );
+
   // Skip messages we sent (fromMe = true)
-  if (key.fromMe) return;
+  if (key.fromMe) {
+    console.log('[evolution-webhook] Skipping outbound message (fromMe=true)');
+    return;
+  }
 
   const admin = supabaseAdmin();
 
@@ -254,6 +270,10 @@ async function handleMessageUpsert(
     return;
   }
 
+  console.log(
+    `[evolution-webhook] Message saved: id=${savedMessage.id}, conversation=${conversationId}, contact=${contactId}`
+  );
+
   // Update conversation metadata
   await admin
     .from('conversations')
@@ -338,6 +358,8 @@ async function handleConnectionUpdate(
 ) {
   const admin = supabaseAdmin();
   const { state } = data;
+
+  console.log(`[evolution-webhook] Connection update: instance=${instanceName}, state=${state}`);
 
   const status = state === 'open' ? 'connected' : 'disconnected';
 
