@@ -354,7 +354,7 @@ export async function sendEvolutionTextMessage(params: {
       method: 'POST',
       body: JSON.stringify({
         number,
-        textMessage: { text },
+        text,
         delay,
         linkPreview,
         quoted,
