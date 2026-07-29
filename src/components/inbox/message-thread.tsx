@@ -49,6 +49,7 @@ import {
 import { deleteAccountMedia } from "@/lib/storage/upload-media";
 import { TemplatePicker } from "./template-picker";
 import { AiThreadBanner } from "./ai-thread-banner";
+import { ConversationSummary } from "./conversation-summary";
 import { buildReplyPreview } from "./reply-quote";
 import { toast } from "sonner";
 
@@ -1072,6 +1073,13 @@ export function MessageThread({
           </div>
         ) : (
           <div className="space-y-4">
+            {/* AI Summary — shown when conversation is assigned to current agent */}
+            {conversation.assigned_agent_id === user?.id && (
+              <ConversationSummary
+                conversationId={conversation.id}
+                existingSummary={conversation.ai_handoff_summary}
+              />
+            )}
             {messageGroups.map((group) => (
               <div key={group.date}>
                 {/* Date separator */}
