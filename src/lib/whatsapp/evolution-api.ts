@@ -514,6 +514,10 @@ export async function sendEvolutionReaction(params: {
  *
  * Evolution v2.3.7 endpoint: POST /message/sendButtons/{instanceName}
  * Request: { number, title?, description?, footer?, buttons: [{ type, displayText, id }] }
+ *
+ * The Evolution response may or may not include a `key` field depending
+ * on the Baileys version. We extract `key.id` with a fallback so callers
+ * always get a usable message id.
  */
 export async function sendEvolutionButtonsMessage(params: {
   baseUrl: string;
@@ -528,7 +532,7 @@ export async function sendEvolutionButtonsMessage(params: {
   const { baseUrl, apiKey, instanceName, number, bodyText, headerText, footerText, buttons } =
     params;
 
-  return evolutionFetch<EvolutionSendResult>(
+  const raw = await evolutionFetch<Record<string, unknown>>(
     baseUrl,
     apiKey,
     `/message/sendButtons/${instanceName}`,
@@ -547,14 +551,33 @@ export async function sendEvolutionButtonsMessage(params: {
       }),
     }
   );
+
+  // Evolution v2.3.7 may return { key: { id } } or just { message: { ... } }
+  const key = raw.key as { remoteJid?: string; fromMe?: boolean; id?: string } | undefined;
+  const msgId = key?.id || (raw as { messageId?: string }).messageId || '';
+
+  console.log('[evolution-buttons] response:', JSON.stringify(raw).slice(0, 300));
+
+  return {
+    key: {
+      remoteJid: key?.remoteJid || `${number}@s.whatsapp.net`,
+      fromMe: key?.fromMe ?? true,
+      id: msgId,
+    },
+    message: raw.message as Record<string, unknown> | undefined,
+    messageTimestamp: raw.messageTimestamp as string | undefined,
+    status: raw.status as string | undefined,
+  };
 }
 
 /**
  * Send an interactive list message via Evolution API.
  *
  * Evolution v2.3.7 endpoint: POST /message/sendList/{instanceName}
- * Request: { number, title?, description?, buttonText, footerText?,
- *            sections: [{ title?, rows: [{ title, description?, rowId }] }] }
+ * Request: { number, title, description?, buttonText, footerText,
+ *            sections: [{ title, rows: [{ title, description?, rowId }] }] }
+ *
+ * `title` and `footerText` are REQUIRED by the Evolution API schema.
  */
 export async function sendEvolutionListMessage(params: {
   baseUrl: string;
@@ -575,7 +598,7 @@ export async function sendEvolutionListMessage(params: {
     bodyText, headerText, footerText, buttonLabel, sections,
   } = params;
 
-  return evolutionFetch<EvolutionSendResult>(
+  const raw = await evolutionFetch<Record<string, unknown>>(
     baseUrl,
     apiKey,
     `/message/sendList/${instanceName}`,
@@ -583,12 +606,12 @@ export async function sendEvolutionListMessage(params: {
       method: 'POST',
       body: JSON.stringify({
         number,
-        title: headerText || undefined,
+        title: headerText || bodyText.slice(0, 60) || 'Options',
         description: bodyText,
         buttonText: buttonLabel,
-        footerText: footerText || undefined,
+        footerText: footerText || ' ',
         sections: sections.map((s) => ({
-          ...(s.title ? { title: s.title } : {}),
+          title: s.title || 'Options',
           rows: s.rows.map((r) => ({
             title: r.title,
             description: r.description || undefined,
@@ -598,6 +621,22 @@ export async function sendEvolutionListMessage(params: {
       }),
     }
   );
+
+  const key = raw.key as { remoteJid?: string; fromMe?: boolean; id?: string } | undefined;
+  const msgId = key?.id || (raw as { messageId?: string }).messageId || '';
+
+  console.log('[evolution-list] response:', JSON.stringify(raw).slice(0, 300));
+
+  return {
+    key: {
+      remoteJid: key?.remoteJid || `${number}@s.whatsapp.net`,
+      fromMe: key?.fromMe ?? true,
+      id: msgId,
+    },
+    message: raw.message as Record<string, unknown> | undefined,
+    messageTimestamp: raw.messageTimestamp as string | undefined,
+    status: raw.status as string | undefined,
+  };
 }
 
 // ---------------------------------------------------------------
