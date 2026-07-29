@@ -973,52 +973,54 @@ export function WhatsAppConfig() {
                 </p>
               </div>
 
-              {/* QR Code Section */}
-              {(evolutionQrCode || evolutionConnecting) && (
-                <div className="space-y-4 pt-4 border-t border-border">
-                  <Label className="text-muted-foreground">Connect WhatsApp</Label>
-                  {evolutionConnecting ? (
-                    <div className="flex items-center justify-center py-8">
-                      <Loader2 className="size-8 animate-spin text-primary" />
-                      <span className="ml-2 text-muted-foreground">Connecting...</span>
-                    </div>
-                  ) : evolutionQrCode ? (
-                    <div className="space-y-3">
-                      <p className="text-sm text-muted-foreground">
-                        Scan this QR code with your WhatsApp app:
-                      </p>
-                      <div className="flex justify-center">
-                        <img
-                          src={evolutionQrCode}
-                          alt="WhatsApp QR Code"
-                          className="max-w-[256px] rounded-lg border border-border"
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <Label className="text-muted-foreground">Or use pairing code:</Label>
-                        <div className="flex gap-2">
-                          <Input
-                            placeholder="Phone number (e.g. 5511999999999)"
-                            value={evolutionPairingCode}
-                            onChange={(e) => setEvolutionPairingCode(e.target.value)}
-                            className="bg-muted border-border text-foreground placeholder:text-muted-foreground"
-                          />
-                          <Button
-                            variant="outline"
-                            onClick={handleEvolutionConnect}
-                            disabled={!evolutionPairingCode.trim()}
-                            className="border-border text-muted-foreground hover:text-foreground hover:bg-muted"
-                          >
-                            Connect
-                          </Button>
-                        </div>
-                      </div>
-                    </div>
-                  ) : null}
-                </div>
-              )}
             </CardContent>
           </Card>
+          )}
+          {/* QR Code Section — shown outside both compact & form cards */}
+          {(evolutionQrCode || evolutionConnecting) && selectedProvider === 'evolution' && (
+            <Card>
+              <CardContent className="space-y-4 pt-4">
+                <Label className="text-muted-foreground">Connect WhatsApp</Label>
+                {evolutionConnecting ? (
+                  <div className="flex items-center justify-center py-8">
+                    <Loader2 className="size-8 animate-spin text-primary" />
+                    <span className="ml-2 text-muted-foreground">Connecting...</span>
+                  </div>
+                ) : evolutionQrCode ? (
+                  <div className="space-y-3">
+                    <p className="text-sm text-muted-foreground">
+                      Scan this QR code with your WhatsApp app:
+                    </p>
+                    <div className="flex justify-center">
+                      <img
+                        src={evolutionQrCode}
+                        alt="WhatsApp QR Code"
+                        className="max-w-[256px] rounded-lg border border-border"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label className="text-muted-foreground">Or use pairing code:</Label>
+                      <div className="flex gap-2">
+                        <Input
+                          placeholder="Phone number (e.g. 5511999999999)"
+                          value={evolutionPairingCode}
+                          onChange={(e) => setEvolutionPairingCode(e.target.value)}
+                          className="bg-muted border-border text-foreground placeholder:text-muted-foreground"
+                        />
+                        <Button
+                          variant="outline"
+                          onClick={handleEvolutionConnect}
+                          disabled={!evolutionPairingCode.trim()}
+                          className="border-border text-muted-foreground hover:text-foreground hover:bg-muted"
+                        >
+                          Connect
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
+              </CardContent>
+            </Card>
           )}
           </>
         )}
