@@ -32,6 +32,8 @@ import {
 import {
   sendEvolutionTextMessage,
   sendEvolutionMediaMessage,
+  sendEvolutionButtonsMessage,
+  sendEvolutionListMessage,
   getEvolutionCredentials,
 } from '@/lib/whatsapp/evolution-api';
 import {
@@ -370,15 +372,44 @@ export async function sendMessageToConversation(
         return result.key.id;
       }
 
-      // Template and interactive messages are not supported by Evolution API
-      // Fall back to text message
-      if (messageType === 'template' || messageType === 'interactive') {
+      // Template messages are not supported by Evolution API — fall back to text
+      if (messageType === 'template') {
         const result = await sendEvolutionTextMessage({
           baseUrl: credentials.baseUrl,
           apiKey: credentials.apiKey,
           instanceName: credentials.instanceName,
           number: phone,
-          text: contentText || `[${messageType}]`,
+          text: contentText || `[template:${templateName}]`,
+        });
+        return result.key.id;
+      }
+
+      // Interactive messages — route to Evolution native endpoints
+      if (messageType === 'interactive') {
+        const p = interactivePayload!;
+        if (p.kind === 'buttons') {
+          const result = await sendEvolutionButtonsMessage({
+            baseUrl: credentials.baseUrl,
+            apiKey: credentials.apiKey,
+            instanceName: credentials.instanceName,
+            number: phone,
+            bodyText: p.body,
+            headerText: p.header || undefined,
+            footerText: p.footer || undefined,
+            buttons: p.buttons,
+          });
+          return result.key.id;
+        }
+        const result = await sendEvolutionListMessage({
+          baseUrl: credentials.baseUrl,
+          apiKey: credentials.apiKey,
+          instanceName: credentials.instanceName,
+          number: phone,
+          bodyText: p.body,
+          headerText: p.header || undefined,
+          footerText: p.footer || undefined,
+          buttonLabel: p.button_label,
+          sections: p.sections,
         });
         return result.key.id;
       }

@@ -10,6 +10,8 @@ import {
 import {
   sendEvolutionTextMessage,
   sendEvolutionMediaMessage,
+  sendEvolutionButtonsMessage,
+  sendEvolutionListMessage,
   getEvolutionCredentials,
 } from '@/lib/whatsapp/evolution-api'
 import type { InteractiveMessagePayload } from '@/lib/whatsapp/interactive'
@@ -336,20 +338,37 @@ async function sendInteractiveViaMeta(
   const provider: WhatsAppProvider = config.provider || 'meta'
   let waMessageId = ''
 
-  // Evolution API doesn't support interactive buttons/lists —
-  // fall back to sending the body text as a plain message.
+  // Evolution API — native interactive endpoints
   if (provider === 'evolution') {
     const credentials = getEvolutionCredentials(config)
     if (!credentials) throw new Error('Evolution API credentials not configured')
 
-    const result = await sendEvolutionTextMessage({
-      baseUrl: credentials.baseUrl,
-      apiKey: credentials.apiKey,
-      instanceName: credentials.instanceName,
-      number: sanitized,
-      text: input.bodyText,
-    })
-    waMessageId = result.key.id
+    if (input.kind === 'buttons') {
+      const result = await sendEvolutionButtonsMessage({
+        baseUrl: credentials.baseUrl,
+        apiKey: credentials.apiKey,
+        instanceName: credentials.instanceName,
+        number: sanitized,
+        bodyText: input.bodyText,
+        headerText: input.headerText,
+        footerText: input.footerText,
+        buttons: input.buttons,
+      })
+      waMessageId = result.key.id
+    } else {
+      const result = await sendEvolutionListMessage({
+        baseUrl: credentials.baseUrl,
+        apiKey: credentials.apiKey,
+        instanceName: credentials.instanceName,
+        number: sanitized,
+        bodyText: input.bodyText,
+        headerText: input.headerText,
+        footerText: input.footerText,
+        buttonLabel: input.buttonLabel,
+        sections: input.sections,
+      })
+      waMessageId = result.key.id
+    }
   } else {
     const accessToken = decrypt(config.access_token)
     const attempt = async (phone: string): Promise<string> => {

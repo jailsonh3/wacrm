@@ -238,6 +238,9 @@ async function handleMessageUpsert(
   // Determine message type
   const contentType = determineContentType(message);
 
+  // Extract interactive reply ID (button/list tap)
+  const interactiveReplyId = extractInteractiveReplyId(message);
+
   // Check if this is the first inbound message
   const { count } = await admin
     .from('messages')
@@ -259,6 +262,7 @@ async function handleMessageUpsert(
       media_url: content.mediaUrl,
       message_id: key.id,
       status: 'delivered',
+      interactive_reply_id: interactiveReplyId,
       created_at: new Date(
         (messageTimestamp ?? Date.now() / 1000) * 1000
       ).toISOString(),
@@ -310,11 +314,16 @@ async function handleMessageUpsert(
     | 'first_inbound_message'
     | 'new_message_received'
     | 'keyword_match'
+    | 'interactive_reply'
   )[] = [];
 
   // Content-level triggers are suppressed when a flow consumed the message
   if (!flowConsumed) {
     automationTriggers.push('new_message_received', 'keyword_match');
+    // Interactive tap → fire the interactive_reply trigger too
+    if (interactiveReplyId) {
+      automationTriggers.push('interactive_reply');
+    }
   }
 
   // Contact-level triggers
@@ -329,12 +338,13 @@ async function handleMessageUpsert(
       context: {
         message_text: inboundText,
         conversation_id: conversationId,
+        interactive_reply_id: interactiveReplyId ?? undefined,
       },
     }).catch((err) => console.error('[automations] dispatch failed:', err));
   }
 
-  // AI auto-reply (only if flow didn't consume and there's text)
-  if (!flowConsumed && inboundText.trim()) {
+  // AI auto-reply (only if flow didn't consume, no interactive tap, and there's text)
+  if (!flowConsumed && !interactiveReplyId && inboundText.trim()) {
     await dispatchInboundToAiReply({
       accountId,
       conversationId,
@@ -476,6 +486,20 @@ function determineContentType(
   if (message.audioMessage) return 'audio';
   if (message.stickerMessage) return 'image'; // Treat stickers as images
   if (message.locationMessage) return 'location';
+  if (message.buttonsResponseMessage || message.listResponseMessage) return 'interactive';
 
   return 'text';
+}
+
+function extractInteractiveReplyId(
+  message: EvolutionWebhookEvent['data']['message']
+): string | null {
+  if (!message) return null;
+  if (message.buttonsResponseMessage?.selectedButtonId) {
+    return message.buttonsResponseMessage.selectedButtonId;
+  }
+  if (message.listResponseMessage?.singleSelectReply?.selectedRowId) {
+    return message.listResponseMessage.singleSelectReply.selectedRowId;
+  }
+  return null;
 }

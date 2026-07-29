@@ -506,6 +506,101 @@ export async function sendEvolutionReaction(params: {
 }
 
 // ---------------------------------------------------------------
+// Interactive messages — buttons & lists
+// ---------------------------------------------------------------
+
+/**
+ * Send an interactive message with reply buttons via Evolution API.
+ *
+ * Evolution v2.3.7 endpoint: POST /message/sendButtons/{instanceName}
+ * Request: { number, title?, description?, footer?, buttons: [{ type, displayText, id }] }
+ */
+export async function sendEvolutionButtonsMessage(params: {
+  baseUrl: string;
+  apiKey: string;
+  instanceName: string;
+  number: string;
+  bodyText: string;
+  headerText?: string;
+  footerText?: string;
+  buttons: Array<{ id: string; title: string }>;
+}): Promise<EvolutionSendResult> {
+  const { baseUrl, apiKey, instanceName, number, bodyText, headerText, footerText, buttons } =
+    params;
+
+  return evolutionFetch<EvolutionSendResult>(
+    baseUrl,
+    apiKey,
+    `/message/sendButtons/${instanceName}`,
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        number,
+        title: headerText || undefined,
+        description: bodyText,
+        footer: footerText || undefined,
+        buttons: buttons.map((b) => ({
+          type: 'reply',
+          displayText: b.title,
+          id: b.id,
+        })),
+      }),
+    }
+  );
+}
+
+/**
+ * Send an interactive list message via Evolution API.
+ *
+ * Evolution v2.3.7 endpoint: POST /message/sendList/{instanceName}
+ * Request: { number, title?, description?, buttonText, footerText?,
+ *            sections: [{ title?, rows: [{ title, description?, rowId }] }] }
+ */
+export async function sendEvolutionListMessage(params: {
+  baseUrl: string;
+  apiKey: string;
+  instanceName: string;
+  number: string;
+  bodyText: string;
+  headerText?: string;
+  footerText?: string;
+  buttonLabel: string;
+  sections: Array<{
+    title?: string;
+    rows: Array<{ id: string; title: string; description?: string }>;
+  }>;
+}): Promise<EvolutionSendResult> {
+  const {
+    baseUrl, apiKey, instanceName, number,
+    bodyText, headerText, footerText, buttonLabel, sections,
+  } = params;
+
+  return evolutionFetch<EvolutionSendResult>(
+    baseUrl,
+    apiKey,
+    `/message/sendList/${instanceName}`,
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        number,
+        title: headerText || undefined,
+        description: bodyText,
+        buttonText: buttonLabel,
+        footerText: footerText || undefined,
+        sections: sections.map((s) => ({
+          ...(s.title ? { title: s.title } : {}),
+          rows: s.rows.map((r) => ({
+            title: r.title,
+            description: r.description || undefined,
+            rowId: r.id,
+          })),
+        })),
+      }),
+    }
+  );
+}
+
+// ---------------------------------------------------------------
 // Decrypted config helper
 // ---------------------------------------------------------------
 
