@@ -6,7 +6,12 @@ import {
   subscribeWabaToApp,
   verifyPhoneNumber,
 } from '@/lib/whatsapp/meta-api'
+import {
+  getEvolutionCredentials,
+  getEvolutionInstanceState,
+} from '@/lib/whatsapp/evolution-api'
 import { encrypt, decrypt } from '@/lib/whatsapp/encryption'
+import type { WhatsAppProvider } from '@/types'
 
 /**
  * Resolve the caller's account_id from their profile. Inlined here
@@ -87,7 +92,7 @@ export async function GET() {
 
     const { data: config, error: configError } = await supabase
       .from('whatsapp_config')
-      .select('phone_number_id, access_token, status')
+      .select('*')
       .eq('account_id', accountId)
       .maybeSingle()
 
@@ -129,7 +134,36 @@ export async function GET() {
       )
     }
 
-    // Validate credentials against Meta
+    const provider: WhatsAppProvider = config.provider || 'meta'
+
+    // Evolution API — check instance connection state instead of Meta
+    if (provider === 'evolution') {
+      const evoCreds = getEvolutionCredentials(config)
+      if (!evoCreds) {
+        return NextResponse.json(
+          { connected: false, reason: 'evolution_not_configured', message: 'Evolution API credentials not configured.' },
+          { status: 200 }
+        )
+      }
+      try {
+        const { state } = await getEvolutionInstanceState(evoCreds)
+        return NextResponse.json({
+          connected: state === 'open',
+          provider: 'evolution',
+          state,
+          phone_info: { display_phone_number: config.evolution_instance_name || 'Evolution' },
+        })
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error'
+        console.error('[whatsapp/config GET] Evolution state check failed:', message)
+        return NextResponse.json(
+          { connected: false, reason: 'evolution_error', message: `Evolution API error: ${message}` },
+          { status: 200 }
+        )
+      }
+    }
+
+    // Meta API — validate credentials against Meta
     try {
       const phoneInfo = await verifyPhoneNumber({
         phoneNumberId: config.phone_number_id,
